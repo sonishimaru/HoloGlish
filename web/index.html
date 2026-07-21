@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HoloGlish — ホロライブ版 YouGlish</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1 class="logo">HoloGlish</h1>
+    <p class="tagline">ホロライブ配信の中から、その言葉が話されている場面を探す</p>
+  </header>
+
+  <main>
+    <form id="search-form" class="search">
+      <input id="q" type="text" placeholder="例: おはよ、ぺこ、hello …" autocomplete="off" autofocus />
+      <button type="submit">検索</button>
+    </form>
+
+    <div class="filters">
+      <select id="f-branch"><option value="">全ブランチ</option></select>
+      <select id="f-member"><option value="">全メンバー</option></select>
+      <select id="f-lang"><option value="">全言語</option></select>
+    </div>
+
+    <div id="status" class="status"></div>
+
+    <section id="player-area" class="player-area hidden">
+      <div class="player-wrap">
+        <div id="player"></div>
+      </div>
+      <div class="player-meta">
+        <div id="now-member" class="now-member"></div>
+        <div id="now-title" class="now-title"></div>
+        <div id="now-caption" class="now-caption"></div>
+        <div class="nav">
+          <button id="prev-btn" type="button">← 前の用例</button>
+          <span id="counter" class="counter"></span>
+          <button id="next-btn" type="button">次の用例 →</button>
+        </div>
+        <label class="autoplay">
+          <input id="autoplay" type="checkbox" checked /> 用例を連続再生
+        </label>
+      </div>
+    </section>
+
+    <ul id="results" class="results"></ul>
+    <div id="pager" class="pager"></div>
+  </main>
+
+  <footer class="footer">
+    <p>字幕は索引用に取得し、再生は YouTube 公式プレイヤー経由です。非公式のファンツールであり、カバー(hololive production)とは無関係です。</p>
+  </footer>
+
+  <script src="https://www.youtube.com/iframe_api"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

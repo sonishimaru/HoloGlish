@@ -1,0 +1,37 @@
+# HoloGlish 対象チャンネル定義（ホロライブ JP / EN / ID）
+#
+# これは編集可能な「種」データです。デビュー・卒業に合わせて自由に追加・削除してください。
+# channel_id は YouTube チャンネルの UCxxxx 形式ID。
+#   - 取得方法: 対象チャンネルの「概要」→ URL共有、または about ページのソースから UC... を確認。
+#   - ここに載せた ID は代表例です。実運用前に必ず各自で最新をご確認ください。
+#
+# フィールド:
+#   channel_id : YouTube チャンネルID (UC...)
+#   member     : 表示名
+#   branch     : jp / en / id
+#   lang       : 主言語の字幕を優先取得 (ja / en / id)。パイプラインは ja,en,id を横断取得します。
+
+channels:
+  # ---- hololive JP ----
+  - { channel_id: UCp6993wxpyDPHUpavwDFqgg, member: Tokino Sora,        branch: jp, lang: ja }
+  - { channel_id: UC5CwaMl1eIgY8h02uZw7u8A, member: Hoshimachi Suisei,  branch: jp, lang: ja }
+  - { channel_id: UC-hM6YJuNYVAmUWxeIr9FeA, member: Sakura Miko,        branch: jp, lang: ja }
+  - { channel_id: UCdn5BQ06XqgXoAxIhbqw5Rg, member: Shirakami Fubuki,   branch: jp, lang: ja }
+  - { channel_id: UC1opHUrw8rvnsadT-iGp7Cg, member: Minato Aqua,        branch: jp, lang: ja }
+  - { channel_id: UCvzGlP9oQwU--Y0r9id_jnA, member: Oozora Subaru,      branch: jp, lang: ja }
+  - { channel_id: UChAnqc_AY5_I3Px5dig3X1Q, member: Inugami Korone,     branch: jp, lang: ja }
+  - { channel_id: UCvaTdHTWBGv3MKj3KVqJVCw, member: Nekomata Okayu,     branch: jp, lang: ja }
+  - { channel_id: UC1DCedRgGHBdm81E1llLhOQ, member: Usada Pekora,       branch: jp, lang: ja }
+  - { channel_id: UCUKD-uaobj9jiqB-VXt71mA, member: Shishiro Botan,     branch: jp, lang: ja }
+
+  # ---- hololive English ----
+  - { channel_id: UCoSrY_IQQVpmIRZ9Xf-y93g, member: Gawr Gura,         branch: en, lang: en }
+  - { channel_id: UCL_qhgtOy0dy1Agp8vkySQg, member: Mori Calliope,     branch: en, lang: en }
+  - { channel_id: UCHsx4Hqa-1ORjQTh9TYDhww, member: Takanashi Kiara,   branch: en, lang: en }
+  - { channel_id: UCMwGHR0BTZuLsmjY_NT5Pwg, member: Ninomae Ina'nis,   branch: en, lang: en }
+  - { channel_id: UCyl1z3jo3XHR1riLFKG5UAg, member: Watson Amelia,     branch: en, lang: en }
+
+  # ---- hololive Indonesia ----
+  - { channel_id: UCOyYb1c43VlX9rc_lT6NKQw, member: Ayunda Risu,       branch: id, lang: id }
+  - { channel_id: UCP0BspO_AMEe3aQqqpo89Dg, member: Moona Hoshinova,   branch: id, lang: id }
+  - { channel_id: UCAoy6rzhSf4ydcYjJw3WoVg, member: Airani Iofifteen,  branch: id, lang: id }

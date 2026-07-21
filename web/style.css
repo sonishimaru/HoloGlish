@@ -1,0 +1,108 @@
+:root {
+  --bg: #0f1020;
+  --panel: #1a1b33;
+  --panel-2: #23244a;
+  --text: #e8e8f5;
+  --muted: #9a9ac0;
+  --accent: #6ce5c8;
+  --accent-2: #8a7dff;
+  --hi: #ffd76c;
+  --radius: 12px;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f4f4fb; --panel: #ffffff; --panel-2: #ececf7;
+    --text: #1c1c2c; --muted: #5a5a78; --accent: #12a58a; --accent-2: #6a5cff; --hi: #b8860b;
+  }
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font-family: system-ui, "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
+  line-height: 1.6;
+}
+main { max-width: 900px; margin: 0 auto; padding: 0 16px 64px; }
+
+.topbar { text-align: center; padding: 28px 16px 8px; }
+.logo {
+  margin: 0; font-size: 2.2rem; letter-spacing: 1px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.tagline { margin: 4px 0 0; color: var(--muted); font-size: .95rem; }
+
+.search { display: flex; gap: 8px; margin: 20px 0 12px; }
+.search input {
+  flex: 1; padding: 12px 16px; font-size: 1.1rem; border-radius: var(--radius);
+  border: 1px solid var(--panel-2); background: var(--panel); color: var(--text);
+}
+.search button {
+  padding: 0 22px; font-size: 1rem; border: none; border-radius: var(--radius);
+  background: var(--accent); color: #06251f; font-weight: 700; cursor: pointer;
+}
+.search button:hover { filter: brightness(1.08); }
+
+.filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.filters select {
+  padding: 8px 10px; border-radius: 8px; background: var(--panel);
+  color: var(--text); border: 1px solid var(--panel-2);
+}
+
+.status { min-height: 22px; color: var(--muted); font-size: .9rem; margin: 6px 2px; }
+
+.player-area {
+  display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px;
+  background: var(--panel); border-radius: var(--radius); padding: 14px; margin-bottom: 20px;
+}
+@media (max-width: 720px) { .player-area { grid-template-columns: 1fr; } }
+.player-wrap { position: relative; aspect-ratio: 16 / 9; }
+.player-wrap #player, .player-wrap iframe {
+  position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 8px;
+}
+.player-meta { display: flex; flex-direction: column; gap: 8px; }
+.now-member { color: var(--accent); font-weight: 700; }
+.now-title { font-size: .95rem; color: var(--muted); }
+.now-caption {
+  background: var(--panel-2); border-radius: 8px; padding: 10px 12px;
+  font-size: 1.05rem; flex: 1;
+}
+.now-caption mark { background: transparent; color: var(--hi); font-weight: 700; }
+.nav { display: flex; align-items: center; gap: 10px; }
+.nav button {
+  flex: 1; padding: 8px; border: 1px solid var(--panel-2); background: var(--panel-2);
+  color: var(--text); border-radius: 8px; cursor: pointer;
+}
+.nav button:hover { border-color: var(--accent); }
+.counter { color: var(--muted); font-size: .85rem; white-space: nowrap; }
+.autoplay { color: var(--muted); font-size: .85rem; }
+
+.results { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.result {
+  display: flex; gap: 12px; padding: 12px; background: var(--panel);
+  border-radius: 10px; cursor: pointer; border: 1px solid transparent;
+}
+.result:hover { border-color: var(--accent-2); }
+.result.active { border-color: var(--accent); }
+.result .time {
+  font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 700;
+  min-width: 58px; text-align: right;
+}
+.result .body { flex: 1; }
+.result .who { font-size: .82rem; color: var(--muted); margin-bottom: 2px; }
+.result .who .badge {
+  display: inline-block; padding: 0 6px; margin-left: 6px; border-radius: 6px;
+  background: var(--panel-2); font-size: .72rem; text-transform: uppercase;
+}
+.result .snippet mark { background: transparent; color: var(--hi); font-weight: 700; }
+
+.pager { display: flex; justify-content: center; gap: 12px; margin-top: 18px; }
+.pager button {
+  padding: 8px 16px; border-radius: 8px; border: 1px solid var(--panel-2);
+  background: var(--panel); color: var(--text); cursor: pointer;
+}
+.pager button:disabled { opacity: .4; cursor: default; }
+
+.hidden { display: none !important; }
+.footer { text-align: center; color: var(--muted); font-size: .78rem; padding: 24px 16px 40px; }
