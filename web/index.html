@@ -55,6 +55,7 @@
 
         <div class="controls">
           <button id="replay-btn" type="button" title="この用例をもう一度 (R)">↻ リプレイ</button>
+          <button id="share-btn" type="button" title="この用例へのリンクをコピー">🔗 共有</button>
           <label class="ctrl">
             <input id="loop" type="checkbox" /> ループ (L)
           </label>
@@ -91,7 +92,9 @@
   </footer>
 
   <script src="/static/config.js"></script>
-  <script src="https://www.youtube.com/iframe_api"></script>
+  <!-- プレイヤー用の外部スクリプトは async で読み込み、検索UIの初期化をブロックしない。
+       準備完了時に window.onYouTubeIframeAPIReady（app.js で定義）が呼ばれる。 -->
+  <script src="https://www.youtube.com/iframe_api" async></script>
   <script src="/static/api.js"></script>
   <script src="/static/app.js"></script>
 </body>

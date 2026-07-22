@@ -18,6 +18,7 @@ const state = {
   playerReady: false,
   pollTimer: null,
   ctxToken: 0,
+  pendingClip: null, // 共有リンクで指定された用例 {v, t}
 };
 
 const $ = (id) => document.getElementById(id);
@@ -48,6 +49,7 @@ function playCurrent() {
   renderNowPlaying(r);
   markActiveRow();
   loadContext(r);
+  writeHash(); // 再生中の用例を共有URLへ反映
 
   const startSeconds = Math.max(0, Math.floor(r.start));
   const doLoad = () => {
@@ -92,6 +94,22 @@ function replayCurrent() {
   state.player.seekTo(Math.max(0, Math.floor(r.start)), true);
   state.player.playVideo();
   startSegmentWatch(r);
+}
+
+// 再生中の用例へのリンクをコピー（YouGlish の共有相当）
+async function shareCurrent() {
+  if (state.index < 0) return;
+  writeHash(); // 最新のクリップ情報を URL に反映
+  const url = location.href;
+  const btn = $("share-btn");
+  const done = (msg) => { btn.textContent = msg; setTimeout(() => { btn.textContent = "🔗 共有"; }, 1500); };
+  try {
+    await navigator.clipboard.writeText(url);
+    done("✓ コピーしました");
+  } catch (_) {
+    // clipboard 不可の環境ではプロンプトで手動コピー
+    window.prompt("この用例へのリンク:", url);
+  }
 }
 
 function togglePlay() {
@@ -216,7 +234,9 @@ function renderPager() {
 }
 
 // ---------- URL 同期（共有・復元） ----------
-function writeHash() {
+// includeClip=true のとき、再生中の用例(video_id + 秒)も URL に載せ、
+// 共有リンクからその用例へ直接ジャンプできるようにする（YouGlish 風）。
+function writeHash(includeClip = true) {
   const p = new URLSearchParams();
   if (state.query) p.set("q", state.query);
   const branch = $("f-branch").value, member = $("f-member").value, lang = $("f-lang").value;
@@ -224,6 +244,11 @@ function writeHash() {
   if (member) p.set("member", member);
   if (lang) p.set("lang", lang);
   if (state.sort && state.sort !== "date") p.set("sort", state.sort);
+  const r = includeClip ? state.results[state.index] : null;
+  if (r) {
+    p.set("v", r.video_id);
+    p.set("t", Math.floor(r.start));
+  }
   const s = p.toString();
   const next = s ? `#${s}` : "#";
   if (location.hash !== next) history.replaceState(null, "", next);
@@ -237,6 +262,8 @@ function readHash() {
     member: p.get("member") || "",
     lang: p.get("lang") || "",
     sort: p.get("sort") || "date",
+    v: p.get("v") || "",
+    t: p.get("t") || "",
   };
 }
 
@@ -265,7 +292,20 @@ async function loadPage(page, playFirst = false) {
   renderResults();
   renderPager();
 
-  if (state.results.length && (playFirst || page === 1)) {
+  // 共有リンク由来の用例指定があれば、その用例を選んで再生
+  let startIndex = -1;
+  if (state.pendingClip && state.results.length) {
+    const { v, t } = state.pendingClip;
+    startIndex = state.results.findIndex(
+      (r) => r.video_id === v && Math.abs(Math.floor(r.start) - t) <= 1
+    );
+    state.pendingClip = null;
+  }
+
+  if (state.results.length && startIndex >= 0) {
+    state.index = startIndex;
+    playCurrent();
+  } else if (state.results.length && (playFirst || page === 1)) {
     state.index = 0;
     playCurrent();
   } else if (!state.results.length) {
@@ -361,6 +401,7 @@ function init() {
   $("next-btn").addEventListener("click", goNext);
   $("prev-btn").addEventListener("click", goPrev);
   $("replay-btn").addEventListener("click", replayCurrent);
+  $("share-btn").addEventListener("click", shareCurrent);
   $("loop").addEventListener("change", () => { state.loop = $("loop").checked; });
   $("speed").addEventListener("change", () => {
     state.speed = parseFloat($("speed").value) || 1;
@@ -373,6 +414,9 @@ function init() {
   ["f-branch", "f-member", "f-lang"].forEach((id) =>
     $(id).addEventListener("change", () => { if (state.query) loadPage(1, true); }));
   document.addEventListener("keydown", onKey);
+
+  // 共有リンクで用例が指定されていれば、検索後にその用例へジャンプする
+  if (h.v && h.t) state.pendingClip = { v: h.v, t: parseInt(h.t, 10) || 0 };
 
   loadFacets().then(() => {
     // ハッシュにフィルタがあれば復元して自動検索
