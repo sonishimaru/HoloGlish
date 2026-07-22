@@ -10,8 +10,10 @@ name: Scheduled Collect
 
 on:
   schedule:
-    # 6時間ごと。全メンバーの全アーカイブを再開可能に少しずつ収集する。
-    # 1回で終わらないため、繰り返し実行で未取得分を積み上げていく。
+    # 6時間ごと。1実行あたり各チャンネル最大 limit 本を収集し、確実に公開する。
+    # 全アーカイブは繰り返し実行（再開可能）で未取得分を積み上げて到達する。
+    # ※上限なしにするとジョブがタイムアウトし、末尾の公開ステップが走らず
+    #   その実行の収集分が失われるため、必ず1実行を区切る設計にしている。
     - cron: "0 */6 * * *"
   workflow_dispatch:
     inputs:
@@ -24,9 +26,9 @@ on:
         required: false
         default: ""
       limit:
-        description: "チャンネルあたりの取得本数上限（空＝全アーカイブ）"
+        description: "1実行あたりのチャンネル別取得本数（既定30。タイムアウトで消えないよう区切る）"
         required: false
-        default: ""
+        default: "30"
       sleep:
         description: "動画間の待機秒（レート制限対策）"
         required: false
@@ -83,19 +85,21 @@ jobs:
 
       - name: Collect subtitles
         env:
-          # 既定は全ブランチ・全アーカイブ（LIMIT 空 = 上限なし）。再開可能。
+          # 1実行あたり各チャンネル最大 LIMIT 本（既定30）。再開可能で繰り返し積み上げる。
           BRANCH: ${{ inputs.branch }}
           MEMBERS: ${{ inputs.members }}
-          LIMIT: ${{ inputs.limit }}
+          LIMIT: ${{ inputs.limit || '30' }}
           SLEEP: ${{ inputs.sleep || '3' }}
         run: |
           python -m pipeline.run collect \
             ${BRANCH:+--branch "$BRANCH"} \
             ${MEMBERS:+--members "$MEMBERS"} \
-            ${LIMIT:+--limit "$LIMIT"} \
+            --limit "$LIMIT" \
             --sleep "$SLEEP" --retries 4 --retry-base 5
 
+      # 収集ステップが途中で失敗しても、それまでの索引は公開する（データ保全）
       - name: Publish index to hologlish-data branch
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
