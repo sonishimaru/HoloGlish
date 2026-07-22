@@ -14,6 +14,8 @@ const state = {
   sort: "date",
   speed: 1,
   loop: false,
+  clipMode: false, // ±5秒クリップ: 該当箇所の前後を強調ループ
+  clipRadius: 5,
   player: null,
   playerReady: false,
   pollTimer: null,
@@ -42,6 +44,19 @@ function applySpeed() {
   }
 }
 
+// 再生開始位置: クリップモードなら「該当箇所の clipRadius 秒前」から
+function clipStartSeconds(r) {
+  const base = state.clipMode ? r.start - state.clipRadius : r.start;
+  return Math.max(0, Math.floor(base));
+}
+
+// 再生終端: クリップモードなら「該当箇所の clipRadius 秒後」、
+// それ以外はセグメント終端＋余韻
+function clipEndSeconds(r) {
+  if (state.clipMode) return r.start + state.clipRadius;
+  return r.start + Math.max(r.dur || 0, 2) + 1.0;
+}
+
 function playCurrent() {
   const r = state.results[state.index];
   if (!r) return;
@@ -49,9 +64,9 @@ function playCurrent() {
   renderNowPlaying(r);
   markActiveRow();
   loadContext(r);
-  writeHash(); // 再生中の用例を共有URLへ反映
+  writeHash(); // 再生中の用例（＋クリップ状態）を共有URLへ反映
 
-  const startSeconds = Math.max(0, Math.floor(r.start));
+  const startSeconds = clipStartSeconds(r);
   const doLoad = () => {
     state.player.loadVideoById({ videoId: r.video_id, startSeconds });
     applySpeed();
@@ -67,17 +82,18 @@ function playCurrent() {
   startSegmentWatch(r);
 }
 
-// セグメント終端の監視: ループなら先頭へ、連続再生なら次の用例へ
+// 終端の監視: クリップモード or ループなら区間の先頭へ、連続再生なら次の用例へ
 function startSegmentWatch(r) {
   if (state.pollTimer) clearInterval(state.pollTimer);
-  const startSeconds = Math.max(0, Math.floor(r.start));
-  const end = r.start + Math.max(r.dur || 0, 2) + 1.0; // 余韻を少し
+  const startSeconds = clipStartSeconds(r);
+  const end = clipEndSeconds(r);
   state.pollTimer = setInterval(() => {
     if (!state.playerReady || !state.player.getCurrentTime) return;
     const t = state.player.getCurrentTime();
     if (t >= end) {
-      if (state.loop) {
-        state.player.seekTo(startSeconds, true); // 同じ用例を繰り返す
+      // クリップモードとループは区間を繰り返す
+      if (state.clipMode || state.loop) {
+        state.player.seekTo(startSeconds, true);
         return;
       }
       clearInterval(state.pollTimer);
@@ -91,9 +107,18 @@ function startSegmentWatch(r) {
 function replayCurrent() {
   const r = state.results[state.index];
   if (!r || !state.playerReady) return;
-  state.player.seekTo(Math.max(0, Math.floor(r.start)), true);
+  state.player.seekTo(clipStartSeconds(r), true);
   state.player.playVideo();
   startSegmentWatch(r);
+}
+
+// ±5秒クリップの ON/OFF。ON にすると即その区間の先頭から再生し直す。
+function toggleClip(force) {
+  state.clipMode = (typeof force === "boolean") ? force : !state.clipMode;
+  const btn = $("clip-btn");
+  btn.classList.toggle("active", state.clipMode);
+  btn.setAttribute("aria-pressed", String(state.clipMode));
+  if (state.index >= 0) { replayCurrent(); writeHash(); }
 }
 
 // 再生中の用例へのリンクをコピー（YouGlish の共有相当）
@@ -248,6 +273,7 @@ function writeHash(includeClip = true) {
   if (r) {
     p.set("v", r.video_id);
     p.set("t", Math.floor(r.start));
+    if (state.clipMode) p.set("clip", "1"); // 共有リンクを±5秒クリップで開く
   }
   const s = p.toString();
   const next = s ? `#${s}` : "#";
@@ -264,6 +290,7 @@ function readHash() {
     sort: p.get("sort") || "date",
     v: p.get("v") || "",
     t: p.get("t") || "",
+    clip: p.get("clip") === "1",
   };
 }
 
@@ -397,6 +424,7 @@ function onKey(e) {
       $("loop").checked = !$("loop").checked;
       state.loop = $("loop").checked;
       break;
+    case "c": case "C": e.preventDefault(); toggleClip(); break;
   }
 }
 
@@ -409,6 +437,7 @@ function init() {
   $("next-btn").addEventListener("click", goNext);
   $("prev-btn").addEventListener("click", goPrev);
   $("replay-btn").addEventListener("click", replayCurrent);
+  $("clip-btn").addEventListener("click", () => toggleClip());
   $("share-btn").addEventListener("click", shareCurrent);
   $("loop").addEventListener("change", () => { state.loop = $("loop").checked; });
   $("speed").addEventListener("change", () => {
@@ -425,6 +454,8 @@ function init() {
 
   // 共有リンクで用例が指定されていれば、検索後にその用例へジャンプする
   if (h.v && h.t) state.pendingClip = { v: h.v, t: parseInt(h.t, 10) || 0 };
+  // 共有リンクが±5秒クリップ指定ならクリップモードで開く
+  if (h.clip) toggleClip(true);
 
   loadFacets().then(() => {
     // ハッシュにフィルタがあれば復元して自動検索
