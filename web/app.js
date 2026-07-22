@@ -357,6 +357,7 @@ async function doSearch(e) {
   if (e) e.preventDefault();
   state.query = $("q").value.trim();
   if (!state.query) return;
+  saveRecent(state.query);
   await loadPage(1, true);
 }
 
@@ -384,6 +385,41 @@ function fill(sel, items, allLabel) {
 // 表示名（日本語優先、無ければ英語表記）
 function memberName(r) {
   return (r && (r.member_ja || r.member)) || "";
+}
+
+// ---------- 検索履歴（localStorage、最近の検索を再利用） ----------
+const RECENT_KEY = "hologlish:recent";
+const RECENT_MAX = 10;
+
+function getRecent() {
+  try { return JSON.parse(localStorage.getItem(RECENT_KEY) || "[]"); }
+  catch (_) { return []; }
+}
+function saveRecent(q) {
+  q = (q || "").trim();
+  if (!q) return;
+  try {
+    const list = getRecent().filter((x) => x !== q);
+    list.unshift(q);
+    localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, RECENT_MAX)));
+  } catch (_) { /* localStorage 不可でも本体は動く */ }
+}
+function clearRecent() {
+  try { localStorage.removeItem(RECENT_KEY); } catch (_) { /* noop */ }
+  renderRecent();
+}
+function renderRecent() {
+  const wrap = $("recent-wrap"), box = $("recent");
+  const list = getRecent();
+  box.innerHTML = "";
+  if (!list.length) { wrap.classList.add("hidden"); return; }
+  list.forEach((w) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "chip"; b.textContent = w;
+    b.addEventListener("click", () => { $("q").value = w; doSearch(); });
+    box.appendChild(b);
+  });
+  wrap.classList.remove("hidden");
 }
 
 // ---------- ランディング（検索前）: カバレッジ統計 + おすすめ検索 ----------
@@ -414,6 +450,7 @@ async function loadLanding() {
         "まだ字幕が収集されていません（pipeline.run collect / ingest で取り込めます）";
     }
   } catch (_) { /* 統計は補助情報 */ }
+  renderRecent();
   landing.classList.remove("hidden");
 }
 
@@ -449,6 +486,7 @@ function init() {
   $("clip-btn").addEventListener("click", () => toggleClip());
   $("loop-btn").addEventListener("click", () => toggleLoop());
   $("share-btn").addEventListener("click", shareCurrent);
+  $("recent-clear").addEventListener("click", clearRecent);
   $("speed").addEventListener("change", () => {
     state.speed = parseFloat($("speed").value) || 1;
     applySpeed();

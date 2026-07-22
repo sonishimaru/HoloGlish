@@ -6,34 +6,53 @@
 
 字幕を事前収集して SQLite の全文検索インデックスを作り、Web UI から検索・再生します。
 
+**🌐 公開サイト: https://sonishimaru.github.io/HoloGlish/** （サーバ不要・ブラウザだけで検索）
+
 > 非公式のファンツールです。カバー株式会社 / hololive production とは無関係です。
 > 字幕は索引付け目的で取得し、動画の再生は YouTube 公式の埋め込みプレイヤー経由で行います。
+
+## 主な機能
+
+- **多言語の部分一致検索**（日本語・英語・インドネシア語）。並び順は新着順／一致度順。
+- **メンバー名は日本語表記を優先**（例: 兎田ぺこら）。EN/ID など日本語名が無い場合は英語表記。
+- **学習向けの再生**: 該当秒へジャンプ／前後の用例を巡回／連続再生／再生速度(0.5〜1.5×)／
+  ループ／**±5秒クリップ**（前後5秒を強調ループ）。既定は**該当語の2秒前から再生**。
+- **前後トランスクリプト**表示とクリックでのジャンプ。
+- **共有リンク**: 検索条件だけでなく、再生中の用例（クリップ状態含む）へも直接リンクできる。
+- **2つの使い方**: 常駐サーバ不要の**静的サイト**（GitHub Pages）と、動的な **FastAPI サーバ**。
+- **自動収集**: GitHub Actions が定期的に全アーカイブを収集し、索引をキャッシュとして蓄積・公開。
 
 ## 仕組み
 
 ```
-[yt-dlp 収集] → [字幕パース] → [SQLite FTS5 インデックス] → [FastAPI 検索] → [静的フロント + YouTube IFrame]
+[yt-dlp 収集] → [字幕パース] → [SQLite FTS5 インデックス] →┬→ [FastAPI 検索 API]        → [フロント + YouTube IFrame]
+                                                         └→ [静的サイト書き出し(data.json)] → [ブラウザ内検索 (GitHub Pages)]
 ```
 
 - **動画列挙・字幕取得は yt-dlp**（YouTube Data API のキー/クォータ不要）
 - **字幕は手動字幕を優先、無ければ自動生成字幕にフォールバック**（`ja` / `en` / `id` を横断）
 - **多言語の部分一致検索**は SQLite FTS5 の `trigram` トークナイザで実現
   （日本語は分かち書きが無いため形態素解析に依存しない）。1〜2文字の語は `LIKE` フォールバック。
+- **静的サイト版**は同じ検索ロジックを `web/api.js` がブラウザ内で再現し、`data.json` を検索する。
 
 ## ディレクトリ
 
 ```
-config/channels.yaml   対象チャンネル定義（編集可能な種データ）
-pipeline/              収集・パース・インデックス構築
-  run.py               CLI（collect / ingest）
+config/channels.yaml   対象チャンネル定義（member / name_ja / branch / lang。編集可能な種データ）
+pipeline/              収集・パース・インデックス構築・書き出し
+  run.py               CLI（collect / ingest / export / backfill-names）
   fetch_videos.py      チャンネルの動画一覧列挙
   fetch_subtitles.py   字幕DL（手動優先→自動）
   parse_subs.py        json3 / vtt → セグメント
   build_index.py       セグメントを DB へ
-  db.py                SQLite スキーマ（FTS5）
-server/                検索 API（FastAPI）
-web/                   フロント（検索UI + YouTube IFrame プレイヤー）
+  db.py                SQLite スキーマ（FTS5・冪等マイグレーション）
+  export_static.py     索引を静的サイト（data.json + フロント）へ書き出し
+  _net.py              リトライ（指数バックオフ）と cookies オプション
+server/                検索 API（FastAPI）: search.py / app.py
+web/                   フロント。api.js（サーバ/静的の検索抽象）, app.js, index.html, style.css
 data/fixtures/         オフライン検証用サンプル字幕
+.github/workflows/     ci.yml（テスト）/ collect.yml（自動収集）/ pages.yml（Pages 公開）
+tests/                 pytest スイート
 ```
 
 ## セットアップ
@@ -69,10 +88,11 @@ python -m pipeline.run collect --branch en --date-after 20240101 --limit 30
 
 ### 自動収集（スケジュール実行）
 
-GitHub Actions のワークフロー `.github/workflows/collect.yml` で**定期的に自動収集**できます。
+GitHub Actions のワークフロー `.github/workflows/collect.yml` で**定期的に自動収集**します。
 
-- 既定で毎日 1 回動作（`schedule` の cron はリポジトリ側で調整可）。手動実行
-  （`workflow_dispatch`）では対象ブランチ・メンバー・本数・待機秒を指定できます。
+- 既定は**全ブランチ・上限なし（全アーカイブ）・6時間ごと**。1回では終わらないため、
+  繰り返し実行で未取得分を積み上げます（`schedule` の cron はリポジトリ側で調整可）。
+- 手動実行（`workflow_dispatch`）では対象ブランチ・メンバー・本数（空＝全件）・待機秒を指定できます。
 - 生成した索引 `hologlish.db` は専用ブランチ **`hologlish-data`** に蓄積されます
   （毎回、前回分を復元してから追記するため**再開可能**）。`main` は汚しません。
 - **重要**: GitHub ランナーの IP は YouTube に bot 判定されやすいため、安定運用には
@@ -139,10 +159,12 @@ YouGlish のような学習向けの操作に対応しています。
 - **±5秒クリップ**: 該当箇所の前後5秒だけを強調ループ再生（`C` キー）。共有リンクに
   クリップ状態が載り、リンクを開くとその区間から再生されます（動画DLはせず埋め込み再生のまま）。
 - **前後トランスクリプト**: いま再生中の場面の前後の発話を表示し、クリックでその行へジャンプ。
-- **キーボード操作**: `←`／`→` で用例移動、`Space` で再生・停止、`R` でリプレイ、`L` でループ切り替え。
+- **キーボード操作**: `←`／`→` で用例移動、`Space` で再生・停止、`R` でリプレイ、`L` でループ、`C` で±5秒クリップ。
 - **共有可能なURL**: 検索語・フィルタ・並び順が URL のハッシュに反映され、リロードや共有で復元されます。
 - **用例への深いリンク**: 再生中の用例（動画＋秒）も URL に含まれ、「🔗 共有」ボタンや
   リンクのコピーで、その用例へ直接ジャンプできる共有リンクになります。
+- **最近の検索**: 直近の検索語を端末内（localStorage）に保存し、トップページから
+  ワンクリックで再検索できます（「クリア」で消去可能）。
 
 ## 対象範囲について（重要）
 
