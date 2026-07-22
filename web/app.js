@@ -252,6 +252,7 @@ async function loadPage(page, playFirst = false) {
   if (state.sort) params.set("sort", state.sort);
 
   writeHash();
+  hideLanding();
   $("status").textContent = "検索中…";
   const res = await fetch(`/api/search?${params}`);
   const data = await res.json();
@@ -299,6 +300,41 @@ function fill(sel, items, allLabel) {
     o.value = v; o.textContent = v; sel.appendChild(o);
   });
   if (keep) sel.value = keep;
+}
+
+// ---------- ランディング（検索前）: カバレッジ統計 + おすすめ検索 ----------
+const SUGGESTED = ["おはよ", "ありがと", "ぺこ", "こんにちは", "hello", "です", "配信", "ました"];
+
+async function loadLanding() {
+  const landing = $("landing");
+  const sug = $("suggestions");
+  sug.innerHTML = "";
+  SUGGESTED.forEach((w) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "chip";
+    b.textContent = w;
+    b.addEventListener("click", () => {
+      $("q").value = w;
+      doSearch();
+    });
+    sug.appendChild(b);
+  });
+  try {
+    const s = await (await fetch("/api/stats")).json();
+    if (s.videos > 0) {
+      $("coverage").textContent =
+        `${s.members} メンバー・${s.videos} 本の配信・${s.segments.toLocaleString()} 発話から検索`;
+    } else {
+      $("coverage").textContent =
+        "まだ字幕が収集されていません（pipeline.run collect / ingest で取り込めます）";
+    }
+  } catch (_) { /* 統計は補助情報 */ }
+  landing.classList.remove("hidden");
+}
+
+function hideLanding() {
+  $("landing").classList.add("hidden");
 }
 
 // ---------- キーボード操作 ----------
@@ -351,6 +387,8 @@ function init() {
       $("q").value = h.q;
       state.query = h.q;
       loadPage(1, true);
+    } else {
+      loadLanding(); // 検索前はカバレッジ統計とおすすめ検索を表示
     }
   });
 }

@@ -72,3 +72,10 @@ def test_context_endpoint(client):
 def test_context_missing_video_id(client):
     # video_id は必須 → 422
     assert client.get("/api/context").status_code == 422
+
+
+def test_stats_endpoint(client):
+    data = client.get("/api/stats").json()
+    assert data["videos"] >= 1
+    assert data["segments"] >= 1
+    assert "by_branch" in data

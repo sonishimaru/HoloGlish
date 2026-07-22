@@ -112,6 +112,7 @@ uvicorn server.app:app --port 8000
 | `GET /api/search?q=&member=&branch=&lang=&sort=&page=&page_size=` | 字幕検索（JSON）。`sort` は `date`（既定）/ `relevance` |
 | `GET /api/context?video_id=&start=&window=` | 用例の前後トランスクリプト（その場面の周辺発話） |
 | `GET /api/facets` | フィルタ候補（メンバー・ブランチ・言語） |
+| `GET /api/stats` | インデックスのカバレッジ統計（動画数・発話数・メンバー数） |
 | `GET /` | 検索フロント |
 
 ## 環境変数

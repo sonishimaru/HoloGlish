@@ -74,6 +74,16 @@ def api_facets():
         conn.close()
 
 
+@app.get("/api/stats")
+def api_stats():
+    """インデックスのカバレッジ統計（動画数・セグメント数・メンバー数）。"""
+    conn = _conn()
+    try:
+        return _search.stats(conn)
+    finally:
+        conn.close()
+
+
 @app.get("/")
 def index():
     return FileResponse(os.path.join(WEB_DIR, "index.html"))

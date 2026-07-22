@@ -134,5 +134,16 @@ main { max-width: 900px; margin: 0 auto; padding: 0 16px 64px; }
 }
 .pager button:disabled { opacity: .4; cursor: default; }
 
+.landing { text-align: center; padding: 24px 8px 8px; }
+.coverage { color: var(--muted); font-size: .95rem; margin: 0 0 16px; }
+.suggest-wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.suggest-label { color: var(--muted); font-size: .82rem; }
+.suggestions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.chip {
+  padding: 6px 14px; border-radius: 999px; border: 1px solid var(--panel-2);
+  background: var(--panel); color: var(--text); cursor: pointer; font-size: .9rem;
+}
+.chip:hover { border-color: var(--accent); color: var(--accent); }
+
 .hidden { display: none !important; }
 .footer { text-align: center; color: var(--muted); font-size: .78rem; padding: 24px 16px 40px; }

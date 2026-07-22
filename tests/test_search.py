@@ -117,3 +117,12 @@ def test_context_unknown_video(conn):
     ctx = search.context(conn, "does-not-exist", start=0.0)
     assert ctx["video"] is None
     assert ctx["segments"] == []
+
+
+def test_stats(conn):
+    s = search.stats(conn)
+    assert s["videos"] >= 1
+    assert s["segments"] >= 1
+    assert s["members"] >= 1
+    assert s["by_branch"]  # ブランチ別の内訳がある
+    assert sum(s["by_branch"].values()) == s["videos"]

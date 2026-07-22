@@ -123,6 +123,30 @@ def search(
             "total": total, "sort": sort, "results": results}
 
 
+def stats(conn: sqlite3.Connection) -> Dict[str, Any]:
+    """インデックスのカバレッジ統計（トップページ・空状態の表示用）。
+
+    YouGlish の「◯◯本の動画から検索」に相当する規模感を返す。
+    """
+    videos = conn.execute("SELECT COUNT(*) AS n FROM videos").fetchone()["n"]
+    segments = conn.execute("SELECT COUNT(*) AS n FROM segments").fetchone()["n"]
+    members = conn.execute(
+        "SELECT COUNT(DISTINCT member) AS n FROM videos WHERE member <> ''"
+    ).fetchone()["n"]
+    by_branch = {
+        r["branch"]: r["n"]
+        for r in conn.execute(
+            "SELECT branch, COUNT(*) AS n FROM videos WHERE branch <> '' GROUP BY branch"
+        )
+    }
+    return {
+        "videos": videos,
+        "segments": segments,
+        "members": members,
+        "by_branch": by_branch,
+    }
+
+
 def context(
     conn: sqlite3.Connection,
     video_id: str,
