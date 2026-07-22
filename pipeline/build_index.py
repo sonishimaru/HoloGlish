@@ -5,6 +5,8 @@ from __future__ import annotations
 import sqlite3
 from typing import List, Dict, Any
 
+from .normalize import normalize
+
 
 def upsert_video(conn: sqlite3.Connection, video: Dict[str, Any]) -> None:
     video = {"member_ja": "", **video}  # 未指定でも欠損しないように既定を補う
@@ -27,7 +29,7 @@ def replace_segments(
     """既存セグメントを消してから入れ直す（再実行で重複しないように）。"""
     conn.execute("DELETE FROM segments WHERE video_id = ?", (video_id,))
     conn.executemany(
-        "INSERT INTO segments(video_id, lang, start, dur, text) VALUES(?,?,?,?,?)",
-        [(video_id, lang, s["start"], s["dur"], s["text"]) for s in segments],
+        "INSERT INTO segments(video_id, lang, start, dur, text, norm) VALUES(?,?,?,?,?,?)",
+        [(video_id, lang, s["start"], s["dur"], s["text"], normalize(s["text"])) for s in segments],
     )
     return len(segments)

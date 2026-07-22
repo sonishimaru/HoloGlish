@@ -3,24 +3,23 @@
 サーバ無しで、ブラウザ内(クライアントサイド)で検索できる静的サイトを生成する。
 GitHub Pages 等にそのまま公開でき、収集した索引を「キャッシュ」として持ち歩ける。
 
-スケーリング対応:
-  全セグメントを1つの JSON に載せると全アーカイブ（数十万発話）で数十MBになり
-  ブラウザが重く/落ちるため、**トリグラム転置インデックスをシャーディング**して書き出す。
-  - 動画をハッシュで N シャードに分割し、各シャードに「その動画群の
-    メタ・セグメント・トリグラム転置表」を格納（1動画のセグメントは同一シャード）。
-  - グローバルな tri-index.json（トリグラム→該当シャード番号）を1つ持つ。
-  - クライアントは「クエリのトリグラムを含むシャードだけ」を取得して検索するため、
-    全体をDLしない（サーバの FTS5 trigram と同じ部分一致セマンティクス）。
+スケーリング & 検索品質:
+  - 全セグメントを1 JSON に載せると全アーカイブで数十MBになるため、動画を
+    ハッシュで N シャードに分割し、各シャードに「メタ・セグメント」を格納。
+  - 照合は**正規化テキスト**（normalize.py: NFKC・小文字化・空白除去・カナ→かな）で
+    行い、n-gram → 該当シャードのグローバル索引で絞る。
+      * tri-index.json … 3-gram → 該当シャード（3文字以上のクエリ用）
+      * bi-index.json  … 2-gram → 該当シャード（2文字クエリの高速化）
+  - クライアントは「クエリの n-gram を含むシャードだけ」を取得し、シャード内で
+    正規化テキストに対する複数語 AND を検証する（サーバと同じ結果）。
 
 出力構成（out_dir 直下）:
-  index.html            web/index.html の /static/ 参照を相対パスへ書き換えたもの
-  static/app.js         フロント（サーバ版と共通）
-  static/api.js         検索バックエンド抽象（静的モードでシャード索引を検索）
-  static/style.css
-  static/config.js      静的モード切替（HOLOGLISH_INDEX_BASE を設定）
+  index.html
+  static/{app.js, api.js, style.css, config.js}
   static/idx/manifest.json     版・シャード数・facets・stats・件数
-  static/idx/tri-index.json    トリグラム → 該当シャード番号の配列
-  static/idx/shard-<b>.json    各シャード（vids/meta/segs/tri）
+  static/idx/tri-index.json    3-gram → シャード番号配列
+  static/idx/bi-index.json     2-gram → シャード番号配列
+  static/idx/shard-<b>.json    {vids, meta, segs}
 """
 
 from __future__ import annotations
@@ -32,22 +31,19 @@ import shutil
 import sqlite3
 from typing import Any, Dict, List, Set
 
+from .normalize import normalize
 from server import search as _search
 
 WEB_DIR = os.path.join(os.path.dirname(__file__), os.pardir, "web")
 
-# サーバ版フロントからコピーする静的アセット
 _ASSETS = ["app.js", "api.js", "style.css"]
 
-# 1シャードあたりの目安動画数（多いほどシャードは大きく数は少ない）
 VIDEOS_PER_SHARD = 25
 MAX_SHARDS = 256
 
 
-def _trigrams(text: str) -> Set[str]:
-    """テキストの相異なる3-gram（小文字化）。3文字未満は空集合。"""
-    t = text.lower()
-    return {t[i : i + 3] for i in range(len(t) - 2)}
+def _ngrams(text: str, n: int) -> Set[str]:
+    return {text[i : i + n] for i in range(len(text) - n + 1)} if len(text) >= n else set()
 
 
 def _shard_count(num_videos: int) -> int:
@@ -58,21 +54,12 @@ def _shard_count(num_videos: int) -> int:
 
 
 def _bucket(video_id: str, shards: int) -> int:
-    """動画IDから決定的にシャード番号を割り当てる（言語非依存の安定ハッシュ）。
-
-    クライアントはこの計算を必要としない（検索は tri-index 経由、文脈は取得済み
-    シャードから引く）ため、ここだけで完結してよい。
-    """
     h = hashlib.md5(video_id.encode("utf-8")).hexdigest()[:8]
     return int(h, 16) % shards
 
 
 def build_index_files(conn: sqlite3.Connection) -> Dict[str, Any]:
-    """シャード索引一式（manifest / tri-index / shard-*）を組み立てて返す。
-
-    戻り値: {"manifest": {...}, "tri_index": {...}, "shards": {b: {...}}}
-    """
-    # 動画メタ
+    """シャード索引一式（manifest / tri-index / bi-index / shard-*）を返す。"""
     videos: Dict[str, Dict[str, Any]] = {}
     for r in conn.execute(
         "SELECT video_id, member, member_ja, branch, lang, title, url, published_at, sub_kind FROM videos"
@@ -88,7 +75,6 @@ def build_index_files(conn: sqlite3.Connection) -> Dict[str, Any]:
             "sub_kind": r["sub_kind"] or "",
         }
 
-    # 動画ごとのセグメント（時刻順）
     segs_by_video: Dict[str, List[List[Any]]] = {vid: [] for vid in videos}
     seg_total = 0
     for r in conn.execute(
@@ -101,36 +87,38 @@ def build_index_files(conn: sqlite3.Connection) -> Dict[str, Any]:
 
     vids = sorted(videos)
     n = _shard_count(len(vids))
-
-    # 各シャードを構築（vids / meta / segs は並行配列、tri はシャード内転置表）
-    shards: Dict[int, Dict[str, Any]] = {
-        b: {"vids": [], "meta": [], "segs": [], "tri": {}} for b in range(n)
-    }
+    shards: Dict[int, Dict[str, Any]] = {b: {"vids": [], "meta": [], "segs": []} for b in range(n)}
     tri_index: Dict[str, Set[int]] = {}
+    bi_index: Dict[str, Set[int]] = {}
 
     for vid in vids:
         b = _bucket(vid, n)
         sh = shards[b]
-        vi = len(sh["vids"])  # このシャード内での動画ローカル番号
         sh["vids"].append(vid)
         sh["meta"].append(videos[vid])
         seglist = segs_by_video.get(vid, [])
         sh["segs"].append(seglist)
-        for si, seg in enumerate(seglist):
-            for tri in _trigrams(seg[2]):
-                sh["tri"].setdefault(tri, []).append([vi, si])
-                tri_index.setdefault(tri, set()).add(b)
+        for seg in seglist:
+            norm = normalize(seg[2])
+            for g in _ngrams(norm, 3):
+                tri_index.setdefault(g, set()).add(b)
+            for g in _ngrams(norm, 2):
+                bi_index.setdefault(g, set()).add(b)
 
     manifest = {
-        "version": 2,
+        "version": 3,
         "shards": n,
         "videos": len(vids),
         "segments": seg_total,
         "facets": _search.facets(conn),
         "stats": _search.stats(conn),
     }
-    tri_index_out = {tri: sorted(bs) for tri, bs in tri_index.items()}
-    return {"manifest": manifest, "tri_index": tri_index_out, "shards": shards}
+    return {
+        "manifest": manifest,
+        "tri_index": {g: sorted(bs) for g, bs in tri_index.items()},
+        "bi_index": {g: sorted(bs) for g, bs in bi_index.items()},
+        "shards": shards,
+    }
 
 
 def export_site(conn: sqlite3.Connection, out_dir: str) -> Dict[str, Any]:
@@ -138,23 +126,19 @@ def export_site(conn: sqlite3.Connection, out_dir: str) -> Dict[str, Any]:
     static_dir = os.path.join(out_dir, "static")
     idx_dir = os.path.join(static_dir, "idx")
     os.makedirs(idx_dir, exist_ok=True)
-    # 既存シャードが残ると古いデータが混ざるため一旦掃除
     for f in os.listdir(idx_dir):
         if f.endswith(".json"):
             os.remove(os.path.join(idx_dir, f))
 
-    # アセットをコピー
     for name in _ASSETS:
         shutil.copyfile(os.path.join(WEB_DIR, name), os.path.join(static_dir, name))
 
-    # 静的モード設定（シャード索引のベースパス）
     with open(os.path.join(static_dir, "config.js"), "w", encoding="utf-8") as f:
         f.write(
             "// 自動生成: 静的サイト用の設定（このファイルがあると api.js は静的モードで動く）\n"
             "window.HOLOGLISH_INDEX_BASE = 'static/idx';\n"
         )
 
-    # 索引の書き出し
     idx = build_index_files(conn)
 
     def _dump(path: str, obj: Any) -> None:
@@ -163,10 +147,10 @@ def export_site(conn: sqlite3.Connection, out_dir: str) -> Dict[str, Any]:
 
     _dump(os.path.join(idx_dir, "manifest.json"), idx["manifest"])
     _dump(os.path.join(idx_dir, "tri-index.json"), idx["tri_index"])
+    _dump(os.path.join(idx_dir, "bi-index.json"), idx["bi_index"])
     for b, shard in idx["shards"].items():
         _dump(os.path.join(idx_dir, f"shard-{b}.json"), shard)
 
-    # index.html は /static/ 参照を相対パスへ書き換える
     with open(os.path.join(WEB_DIR, "index.html"), "r", encoding="utf-8") as f:
         html = f.read()
     html = html.replace("/static/", "static/")

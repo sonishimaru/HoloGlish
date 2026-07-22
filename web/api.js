@@ -1,12 +1,11 @@
 // 検索バックエンドの抽象。
 // - サーバモード（既定）: FastAPI の /api/* を叩く。
 // - 静的モード: config.js が window.HOLOGLISH_INDEX_BASE を設定していると、
-//   シャード化したトリグラム転置索引をブラウザ内で検索する（サーバ不要）。
-//   クエリのトリグラムを含むシャードだけを取得するため、全アーカイブでも
-//   索引全体をダウンロードしない。
+//   シャード化した n-gram 索引をブラウザ内で検索する（サーバ不要）。
 //
-// どちらのモードでも Api.search / Api.context / Api.facets / Api.stats は
-// server/search.py と同じ形の結果を返す。
+// 照合は正規化テキスト（NFKC・小文字化・空白除去・カナ→かな）に対して行い、
+// 空白区切りの複数語 AND に対応。3文字以上は 3-gram、2文字は 2-gram でシャードを
+// 絞り、1文字は全シャード走査。server/search.py と同じ結果を返す。
 
 const Api = (function () {
   const qs = (params) => {
@@ -28,128 +27,129 @@ const Api = (function () {
     };
   }
 
-  // ---------- 静的モード（シャード索引） ----------
+  // ---------- 静的モード（シャード n-gram 索引） ----------
   const BASE = window.HOLOGLISH_INDEX_BASE.replace(/\/$/, "");
-  let manifest = null;         // {version, shards, videos, segments, facets, stats}
-  let triIndex = null;         // { trigram: [shardBucket, ...] }
-  const shardCache = new Map(); // b -> shard {vids, meta, segs, tri}
+  let manifest = null;
+  let triIndex = null; // { 3gram: [shard,...] }
+  let biIndex = null;  // { 2gram: [shard,...] }
+  const shardCache = new Map();
+
+  // pipeline/normalize.py と同一の正規化（NFKC・小文字・空白除去・カナ→かな）
+  function normalizeText(s) {
+    if (!s) return "";
+    s = s.normalize("NFKC").toLowerCase().replace(/\s+/g, "");
+    let out = "";
+    for (const ch of s) {
+      const o = ch.codePointAt(0);
+      out += (o >= 0x30a1 && o <= 0x30f6) ? String.fromCodePoint(o - 0x60) : ch;
+    }
+    return out;
+  }
+  function queryTerms(q) {
+    return q.trim().split(/\s+/).map(normalizeText).filter(Boolean);
+  }
+  function ngrams(s, n) {
+    const set = new Set();
+    for (let i = 0; i + n <= s.length; i++) set.add(s.slice(i, i + n));
+    return [...set];
+  }
 
   async function load() {
     if (manifest) return;
-    [manifest, triIndex] = await Promise.all([
+    [manifest, triIndex, biIndex] = await Promise.all([
       fetch(`${BASE}/manifest.json`).then((r) => r.json()),
       fetch(`${BASE}/tri-index.json`).then((r) => r.json()),
+      fetch(`${BASE}/bi-index.json`).then((r) => r.json()),
     ]);
   }
 
   async function getShard(b) {
     if (shardCache.has(b)) return shardCache.get(b);
     const sh = await fetch(`${BASE}/shard-${b}.json`).then((r) => r.json());
+    // 照合用の正規化テキストを前計算（検索の度に再計算しない）
+    sh.norms = sh.segs.map((vsegs) => vsegs.map((seg) => normalizeText(seg[2])));
     shardCache.set(b, sh);
     return sh;
   }
-  async function getShards(buckets) {
-    return Promise.all(buckets.map(getShard));
-  }
+  const getShards = (buckets) => Promise.all(buckets.map(getShard));
 
-  // Python 側 _trigrams と同一定義（小文字化・3文字窓・相異なる）
-  function trigrams(text) {
-    const t = text.toLowerCase();
-    const s = new Set();
-    for (let i = 0; i + 3 <= t.length; i++) s.add(t.slice(i, i + 3));
-    return [...s];
-  }
-
-  // server/search.py の _highlight_snippet 相当
-  function snippet(text, query, radius = 40) {
-    const idx = text.toLowerCase().indexOf(query.toLowerCase());
-    if (idx < 0) return text.slice(0, radius * 2);
-    const start = Math.max(0, idx - radius);
-    const end = Math.min(text.length, idx + query.length + radius);
-    return (start > 0 ? "…" : "") + text.slice(start, end) + (end < text.length ? "…" : "");
-  }
-
-  function passFacets(meta, segLang, f) {
-    if (f.member && meta.member !== f.member) return false;
-    if (f.branch && meta.branch !== f.branch) return false;
-    if (f.lang && segLang !== f.lang) return false;
-    return true;
-  }
-
-  // シャード内で、複数トリグラムの posting（[vi,si]）を積集合
-  function intersectPostings(shard, tris) {
-    const lists = tris.map((t) => shard.tri[t] || []);
-    if (lists.some((l) => l.length === 0)) return [];
-    lists.sort((a, b) => a.length - b.length);
-    let cur = new Set(lists[0].map((e) => e[0] + ":" + e[1]));
-    for (let k = 1; k < lists.length && cur.size; k++) {
-      const nxt = new Set(lists[k].map((e) => e[0] + ":" + e[1]));
-      cur = new Set([...cur].filter((key) => nxt.has(key)));
+  function snippet(text, terms, radius = 40) {
+    const lower = text.toLowerCase();
+    for (const t of terms) {
+      const i = lower.indexOf(t);
+      if (i >= 0) {
+        const start = Math.max(0, i - radius);
+        const end = Math.min(text.length, i + t.length + radius);
+        return (start > 0 ? "…" : "") + text.slice(start, end) + (end < text.length ? "…" : "");
+      }
     }
-    return [...cur].map((key) => key.split(":").map(Number)); // [[vi,si],...]
+    return text.slice(0, radius * 2);
   }
 
-  function toResult(shard, vi, si, query) {
-    const meta = shard.meta[vi];
-    const seg = shard.segs[vi][si]; // [start,dur,text,lang]
-    return {
-      video_id: shard.vids[vi],
-      member: meta.member,
-      member_ja: meta.member_ja || "",
-      branch: meta.branch,
-      title: meta.title,
-      url: meta.url,
-      lang: seg[3],
-      sub_kind: meta.sub_kind,
-      start: seg[0],
-      dur: seg[1],
-      text: seg[2],
-      snippet: snippet(seg[2], query),
-    };
+  const intersect = (a, b) => new Set([...a].filter((x) => b.has(x)));
+
+  // 1語の候補シャード集合（null は「絞れない＝全シャード」）
+  function termShards(term) {
+    if (term.length >= 3) {
+      let set = null;
+      for (const g of ngrams(term, 3)) {
+        const bs = triIndex[g];
+        if (!bs) return new Set();
+        const s = new Set(bs);
+        set = set === null ? s : intersect(set, s);
+        if (!set.size) return set;
+      }
+      return set || new Set();
+    }
+    if (term.length === 2) {
+      const bs = biIndex[term];
+      return bs ? new Set(bs) : new Set();
+    }
+    return null; // 1文字は絞れない
   }
 
-  async function collectHits(query, f) {
-    const q = query.toLowerCase();
+  async function collectHits(terms, f) {
+    // 候補シャード = 各語の候補シャードの積集合（1文字語は絞りに寄与しない）
+    let shardSet = null;
+    for (const term of terms) {
+      const ts = termShards(term);
+      if (ts === null) continue;
+      shardSet = shardSet === null ? ts : intersect(shardSet, ts);
+      if (shardSet.size === 0) break;
+    }
+    const buckets = shardSet === null
+      ? Array.from({ length: manifest.shards }, (_, i) => i)
+      : [...shardSet];
+    await getShards(buckets);
+
     const hits = [];
-    if (query.length >= 3) {
-      const tris = trigrams(query);
-      // クエリの全トリグラムを含むシャードだけが候補
-      let buckets = null;
-      for (const t of tris) {
-        const bs = triIndex[t];
-        if (!bs) { buckets = []; break; }
-        if (buckets === null) buckets = bs.slice();
-        else { const set = new Set(bs); buckets = buckets.filter((b) => set.has(b)); }
-        if (!buckets.length) break;
-      }
-      buckets = buckets || [];
-      await getShards(buckets);
-      for (const b of buckets) {
-        const shard = shardCache.get(b);
-        for (const [vi, si] of intersectPostings(shard, tris)) {
-          const seg = shard.segs[vi][si];
-          if (!seg[2].toLowerCase().includes(q)) continue; // 実体で部分一致を確認
-          if (!passFacets(shard.meta[vi], seg[3], f)) continue;
-          hits.push({ b, vi, si });
+    for (const b of buckets) {
+      const shard = shardCache.get(b);
+      for (let vi = 0; vi < shard.vids.length; vi++) {
+        const meta = shard.meta[vi];
+        if (f.member && meta.member !== f.member) continue;
+        if (f.branch && meta.branch !== f.branch) continue;
+        const segs = shard.segs[vi];
+        const norms = shard.norms[vi];
+        for (let si = 0; si < segs.length; si++) {
+          if (f.lang && segs[si][3] !== f.lang) continue;
+          const nt = norms[si];
+          if (terms.every((t) => nt.includes(t))) hits.push({ b, vi, si });
         }
-      }
-    } else {
-      // 1〜2文字はトリグラム索引が使えない → 全シャードを走査（LIKE 相当）
-      const all = Array.from({ length: manifest.shards }, (_, i) => i);
-      await getShards(all);
-      for (const b of all) {
-        const shard = shardCache.get(b);
-        shard.segs.forEach((segs, vi) => {
-          if (!passFacets(shard.meta[vi], null, f) && !f.lang) return; // member/branch 早期除外
-          segs.forEach((seg, si) => {
-            if (!seg[2].toLowerCase().includes(q)) return;
-            if (!passFacets(shard.meta[vi], seg[3], f)) return;
-            hits.push({ b, vi, si });
-          });
-        });
       }
     }
     return hits;
+  }
+
+  function toResult(shard, vi, si, terms) {
+    const meta = shard.meta[vi];
+    const seg = shard.segs[vi][si];
+    return {
+      video_id: shard.vids[vi], member: meta.member, member_ja: meta.member_ja || "",
+      branch: meta.branch, title: meta.title, url: meta.url, lang: seg[3],
+      sub_kind: meta.sub_kind, start: seg[0], dur: seg[1], text: seg[2],
+      snippet: snippet(seg[2], terms),
+    };
   }
 
   async function search(p) {
@@ -158,28 +158,33 @@ const Api = (function () {
     const sort = p.sort === "relevance" ? "relevance" : "date";
     const page = Math.max(1, parseInt(p.page || 1, 10));
     const pageSize = Math.min(Math.max(parseInt(p.page_size || 20, 10), 1), 100);
-    if (!query) return { query, page, page_size: pageSize, total: 0, sort, results: [] };
+    const terms = queryTerms(query);
+    if (!query || !terms.length) return { query, page, page_size: pageSize, total: 0, sort, results: [] };
 
     const f = { member: p.member || "", branch: p.branch || "", lang: p.lang || "" };
-    const hits = await collectHits(query, f);
+    const hits = await collectHits(terms, f);
 
-    const seg = (h) => shardCache.get(h.b).segs[h.vi][h.si];
-    const pub = (h) => shardCache.get(h.b).meta[h.vi].published_at || "";
+    const nt = (h) => shardCache.get(h.b).norms[h.vi][h.si];
+    const meta = (h) => shardCache.get(h.b).meta[h.vi];
     if (sort === "relevance") {
-      hits.sort((a, b) => seg(a)[2].length - seg(b)[2].length ||
-        pub(b).localeCompare(pub(a)));
+      // 自然な並び: 語が早く現れる → 発話が短い（語が目立つ）→ 新しい
+      const pos = (h) => { const i = nt(h).indexOf(terms[0]); return i < 0 ? 1e9 : i; };
+      hits.sort((a, b) =>
+        pos(a) - pos(b) ||
+        nt(a).length - nt(b).length ||
+        (meta(b).published_at || "").localeCompare(meta(a).published_at || ""));
     } else {
-      hits.sort((a, b) => pub(b).localeCompare(pub(a)) || seg(a)[0] - seg(b)[0]);
+      hits.sort((a, b) =>
+        (meta(b).published_at || "").localeCompare(meta(a).published_at || "") ||
+        shardCache.get(a.b).segs[a.vi][a.si][0] - shardCache.get(b.b).segs[b.vi][b.si][0]);
     }
 
     const total = hits.length;
-    const offset = (page - 1) * pageSize;
-    const results = hits.slice(offset, offset + pageSize)
-      .map((h) => toResult(shardCache.get(h.b), h.vi, h.si, query));
+    const results = hits.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize)
+      .map((h) => toResult(shardCache.get(h.b), h.vi, h.si, terms));
     return { query, page, page_size: pageSize, total, sort, results };
   }
 
-  // 取得済みシャードから video を探す（検索でその用例のシャードは取得済み）
   function findVideo(videoId) {
     for (const shard of shardCache.values()) {
       const vi = shard.vids.indexOf(videoId);
@@ -192,24 +197,21 @@ const Api = (function () {
     await load();
     const videoId = p.video_id;
     const start = parseFloat(p.start || 0);
-    let win = parseInt(p.window || 3, 10);
-    win = Math.max(0, Math.min(win, 20));
+    let win = Math.max(0, Math.min(parseInt(p.window || 3, 10), 20));
 
     let hit = findVideo(videoId);
-    if (!hit && manifest.shards <= 16) { // 未取得なら小規模時のみ全ロードして再探索
+    if (!hit && manifest.shards <= 16) {
       await getShards(Array.from({ length: manifest.shards }, (_, i) => i));
       hit = findVideo(videoId);
     }
     if (!hit) return { video_id: videoId, video: null, segments: [] };
 
     const meta = hit.shard.meta[hit.vi];
-    const rows = hit.shard.segs[hit.vi]; // 時刻順 [start,dur,text,lang]
+    const rows = hit.shard.segs[hit.vi];
     if (!rows.length) return { video_id: videoId, video: meta, segments: [] };
-
     let center = 0, best = Infinity;
     rows.forEach((r, i) => { const d = Math.abs(r[0] - start); if (d < best) { best = d; center = i; } });
-    const lo = Math.max(0, center - win);
-    const hi = Math.min(rows.length, center + win + 1);
+    const lo = Math.max(0, center - win), hi = Math.min(rows.length, center + win + 1);
     const segments = [];
     for (let i = lo; i < hi; i++) {
       segments.push({ start: rows[i][0], dur: rows[i][1], text: rows[i][2], is_current: i === center });
