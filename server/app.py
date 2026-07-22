@@ -18,14 +18,15 @@ from fastapi.staticfiles import StaticFiles
 from pipeline import db as _db
 from . import search as _search
 
-DB_PATH = os.environ.get("HOLOGLISH_DB", _db.DEFAULT_DB)
 WEB_DIR = os.path.join(os.path.dirname(__file__), os.pardir, "web")
 
 app = FastAPI(title="HoloGlish", description="ホロライブ版 YouGlish")
 
 
 def _conn():
-    conn = _db.connect(DB_PATH)
+    # DB パスはリクエスト時に解決（テストや運用で HOLOGLISH_DB を切り替えられるように）
+    db_path = os.environ.get("HOLOGLISH_DB", _db.DEFAULT_DB)
+    conn = _db.connect(db_path)
     _db.init_db(conn)  # DB 未生成でも 500 にせず空結果を返せるように
     return conn
 
