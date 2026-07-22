@@ -14,6 +14,9 @@ const state = {
   sort: "date",
   speed: 1,
   loop: false,
+  clipMode: false, // ±5秒クリップ: 該当箇所の前後を強調ループ
+  clipRadius: 5,
+  preroll: 2,      // 既定の再生開始を該当語の何秒前にするか（頭出しの余裕）
   player: null,
   playerReady: false,
   pollTimer: null,
@@ -42,6 +45,20 @@ function applySpeed() {
   }
 }
 
+// 再生開始位置: クリップモードなら該当箇所の clipRadius 秒前、
+// 通常は該当語の preroll 秒前（頭出しの余裕）から始める。
+function clipStartSeconds(r) {
+  const lead = state.clipMode ? state.clipRadius : state.preroll;
+  return Math.max(0, Math.floor(r.start - lead));
+}
+
+// 再生終端: クリップモードなら「該当箇所の clipRadius 秒後」、
+// それ以外はセグメント終端＋余韻
+function clipEndSeconds(r) {
+  if (state.clipMode) return r.start + state.clipRadius;
+  return r.start + Math.max(r.dur || 0, 2) + 1.0;
+}
+
 function playCurrent() {
   const r = state.results[state.index];
   if (!r) return;
@@ -49,9 +66,9 @@ function playCurrent() {
   renderNowPlaying(r);
   markActiveRow();
   loadContext(r);
-  writeHash(); // 再生中の用例を共有URLへ反映
+  writeHash(); // 再生中の用例（＋クリップ状態）を共有URLへ反映
 
-  const startSeconds = Math.max(0, Math.floor(r.start));
+  const startSeconds = clipStartSeconds(r);
   const doLoad = () => {
     state.player.loadVideoById({ videoId: r.video_id, startSeconds });
     applySpeed();
@@ -67,17 +84,18 @@ function playCurrent() {
   startSegmentWatch(r);
 }
 
-// セグメント終端の監視: ループなら先頭へ、連続再生なら次の用例へ
+// 終端の監視: クリップモード or ループなら区間の先頭へ、連続再生なら次の用例へ
 function startSegmentWatch(r) {
   if (state.pollTimer) clearInterval(state.pollTimer);
-  const startSeconds = Math.max(0, Math.floor(r.start));
-  const end = r.start + Math.max(r.dur || 0, 2) + 1.0; // 余韻を少し
+  const startSeconds = clipStartSeconds(r);
+  const end = clipEndSeconds(r);
   state.pollTimer = setInterval(() => {
     if (!state.playerReady || !state.player.getCurrentTime) return;
     const t = state.player.getCurrentTime();
     if (t >= end) {
-      if (state.loop) {
-        state.player.seekTo(startSeconds, true); // 同じ用例を繰り返す
+      // クリップモードとループは区間を繰り返す
+      if (state.clipMode || state.loop) {
+        state.player.seekTo(startSeconds, true);
         return;
       }
       clearInterval(state.pollTimer);
@@ -91,9 +109,26 @@ function startSegmentWatch(r) {
 function replayCurrent() {
   const r = state.results[state.index];
   if (!r || !state.playerReady) return;
-  state.player.seekTo(Math.max(0, Math.floor(r.start)), true);
+  state.player.seekTo(clipStartSeconds(r), true);
   state.player.playVideo();
   startSegmentWatch(r);
+}
+
+// ±5秒クリップの ON/OFF。ON にすると即その区間の先頭から再生し直す。
+function toggleClip(force) {
+  state.clipMode = (typeof force === "boolean") ? force : !state.clipMode;
+  const btn = $("clip-btn");
+  btn.classList.toggle("active", state.clipMode);
+  btn.setAttribute("aria-pressed", String(state.clipMode));
+  if (state.index >= 0) { replayCurrent(); writeHash(); }
+}
+
+// ループの ON/OFF（用例をそのまま繰り返す）。
+function toggleLoop(force) {
+  state.loop = (typeof force === "boolean") ? force : !state.loop;
+  const btn = $("loop-btn");
+  btn.classList.toggle("active", state.loop);
+  btn.setAttribute("aria-pressed", String(state.loop));
 }
 
 // 再生中の用例へのリンクをコピー（YouGlish の共有相当）
@@ -164,7 +199,7 @@ function renderResults() {
     li.innerHTML = `
       <div class="time">${fmtTime(r.start)}</div>
       <div class="body">
-        <div class="who">${escapeHtml(r.member || "")}
+        <div class="who"><span class="who-name">${escapeHtml(memberName(r))}</span>
           <span class="badge">${escapeHtml(r.branch || "")}</span>
           <span class="badge">${escapeHtml(r.sub_kind || "")}</span>
         </div>
@@ -183,7 +218,10 @@ function markActiveRow() {
 }
 
 function renderNowPlaying(r) {
-  $("now-member").textContent = `${r.member || ""} ・ ${r.branch || ""} ・ ${r.lang || ""}`;
+  $("now-member").textContent = memberName(r);
+  $("now-tags").innerHTML =
+    `<span class="tag">${escapeHtml(r.branch || "")}</span>` +
+    `<span class="tag">${escapeHtml(r.lang || "")}</span>`;
   $("now-title").textContent = r.title || "";
   $("now-caption").innerHTML = highlight(r.text || "", state.query);
   $("counter").textContent = `${state.index + 1} / ${state.results.length}（全 ${state.total} 件）`;
@@ -248,6 +286,7 @@ function writeHash(includeClip = true) {
   if (r) {
     p.set("v", r.video_id);
     p.set("t", Math.floor(r.start));
+    if (state.clipMode) p.set("clip", "1"); // 共有リンクを±5秒クリップで開く
   }
   const s = p.toString();
   const next = s ? `#${s}` : "#";
@@ -264,6 +303,7 @@ function readHash() {
     sort: p.get("sort") || "date",
     v: p.get("v") || "",
     t: p.get("t") || "",
+    clip: p.get("clip") === "1",
   };
 }
 
@@ -332,10 +372,18 @@ function fill(sel, items, allLabel) {
   const keep = sel.value;
   sel.innerHTML = `<option value="">${allLabel}</option>`;
   (items || []).forEach((v) => {
+    // 文字列（ブランチ・言語）と {value,label}（メンバー）の両方を許容
+    const value = (v && typeof v === "object") ? v.value : v;
+    const label = (v && typeof v === "object") ? v.label : v;
     const o = document.createElement("option");
-    o.value = v; o.textContent = v; sel.appendChild(o);
+    o.value = value; o.textContent = label; sel.appendChild(o);
   });
   if (keep) sel.value = keep;
+}
+
+// 表示名（日本語優先、無ければ英語表記）
+function memberName(r) {
+  return (r && (r.member_ja || r.member)) || "";
 }
 
 // ---------- ランディング（検索前）: カバレッジ統計 + おすすめ検索 ----------
@@ -384,11 +432,8 @@ function onKey(e) {
     case "ArrowLeft": e.preventDefault(); goPrev(); break;
     case " ": e.preventDefault(); togglePlay(); break;
     case "r": case "R": e.preventDefault(); replayCurrent(); break;
-    case "l": case "L":
-      e.preventDefault();
-      $("loop").checked = !$("loop").checked;
-      state.loop = $("loop").checked;
-      break;
+    case "l": case "L": e.preventDefault(); toggleLoop(); break;
+    case "c": case "C": e.preventDefault(); toggleClip(); break;
   }
 }
 
@@ -401,8 +446,9 @@ function init() {
   $("next-btn").addEventListener("click", goNext);
   $("prev-btn").addEventListener("click", goPrev);
   $("replay-btn").addEventListener("click", replayCurrent);
+  $("clip-btn").addEventListener("click", () => toggleClip());
+  $("loop-btn").addEventListener("click", () => toggleLoop());
   $("share-btn").addEventListener("click", shareCurrent);
-  $("loop").addEventListener("change", () => { state.loop = $("loop").checked; });
   $("speed").addEventListener("change", () => {
     state.speed = parseFloat($("speed").value) || 1;
     applySpeed();
@@ -417,6 +463,8 @@ function init() {
 
   // 共有リンクで用例が指定されていれば、検索後にその用例へジャンプする
   if (h.v && h.t) state.pendingClip = { v: h.v, t: parseInt(h.t, 10) || 0 };
+  // 共有リンクが±5秒クリップ指定ならクリップモードで開く
+  if (h.clip) toggleClip(true);
 
   loadFacets().then(() => {
     // ハッシュにフィルタがあれば復元して自動検索

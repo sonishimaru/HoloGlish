@@ -36,10 +36,11 @@ def build_data(conn: sqlite3.Connection) -> Dict[str, Any]:
     """data.json に載せる索引データを組み立てる。"""
     videos: Dict[str, Any] = {}
     for r in conn.execute(
-        "SELECT video_id, member, branch, lang, title, url, published_at, sub_kind FROM videos"
+        "SELECT video_id, member, member_ja, branch, lang, title, url, published_at, sub_kind FROM videos"
     ):
         videos[r["video_id"]] = {
             "member": r["member"] or "",
+            "member_ja": r["member_ja"] or "",
             "branch": r["branch"] or "",
             "lang": r["lang"] or "",
             "title": r["title"] or "",

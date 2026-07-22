@@ -15,7 +15,8 @@ DEFAULT_DB = os.path.join(os.path.dirname(__file__), os.pardir, "data", "hologli
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS videos (
     video_id     TEXT PRIMARY KEY,
-    member       TEXT,
+    member       TEXT,          -- 内部キー兼英語表記（フィルタ・保存に使う正規名）
+    member_ja    TEXT,          -- UI 表示用の日本語名（無ければ member を表示）
     branch       TEXT,
     lang         TEXT,          -- 採用した字幕の言語
     title        TEXT,
@@ -72,7 +73,15 @@ def connect(db_path: str = DEFAULT_DB) -> sqlite3.Connection:
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA)
+    _migrate(conn)
     conn.commit()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """既存 DB に後から入った列を冪等に追加する（後方互換）。"""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(videos)")}
+    if "member_ja" not in cols:
+        conn.execute("ALTER TABLE videos ADD COLUMN member_ja TEXT")
 
 
 def is_processed(conn: sqlite3.Connection, video_id: str) -> bool:

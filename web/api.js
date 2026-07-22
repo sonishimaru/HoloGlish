@@ -93,6 +93,7 @@ const Api = (function () {
     const results = hits.slice(offset, offset + pageSize).map(({ seg, v }) => ({
       video_id: seg.v,
       member: v.member,
+      member_ja: v.member_ja || "",
       branch: v.branch,
       title: v.title,
       url: v.url,

@@ -31,7 +31,8 @@ def test_search_with_filters(client):
 
 def test_facets_endpoint(client):
     data = client.get("/api/facets").json()
-    assert "Sakura Miko" in data["members"]
+    values = {m["value"] for m in data["members"]}
+    assert "Sakura Miko" in values
     assert set(data["branches"]) == {"jp", "en"}
 
 

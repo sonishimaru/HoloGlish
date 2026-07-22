@@ -93,7 +93,7 @@ def search(
 
     offset = max(0, (page - 1) * page_size)
     rows_sql = f"""
-        SELECT v.video_id, v.member, v.branch, v.title, v.url, v.sub_kind,
+        SELECT v.video_id, v.member, v.member_ja, v.branch, v.title, v.url, v.sub_kind,
                s.start, s.dur, s.text, s.lang
         {from_clause}
         WHERE {where}
@@ -108,6 +108,7 @@ def search(
             {
                 "video_id": r["video_id"],
                 "member": r["member"],
+                "member_ja": r["member_ja"] or "",
                 "branch": r["branch"],
                 "title": r["title"],
                 "url": r["url"],
@@ -192,10 +193,18 @@ def context(
 
 
 def facets(conn: sqlite3.Connection) -> Dict[str, Any]:
-    """フィルタ用の候補（メンバー・ブランチ・言語）を返す。"""
-    members = [r["member"] for r in conn.execute(
-        "SELECT DISTINCT member FROM videos WHERE member <> '' ORDER BY member"
-    )]
+    """フィルタ用の候補（メンバー・ブランチ・言語）を返す。
+
+    メンバーは絞り込みの値（正規名 value）と表示名（日本語優先の label）の
+    組で返す。フロントはフィルタ値に value を使い、表示に label を使う。
+    """
+    members = [
+        {"value": r["member"], "label": (r["member_ja"] or r["member"])}
+        for r in conn.execute(
+            "SELECT member, MAX(member_ja) AS member_ja FROM videos "
+            "WHERE member <> '' GROUP BY member ORDER BY member"
+        )
+    ]
     branches = [r["branch"] for r in conn.execute(
         "SELECT DISTINCT branch FROM videos WHERE branch <> '' ORDER BY branch"
     )]

@@ -43,35 +43,38 @@
         <div id="player"></div>
       </div>
       <div class="player-meta">
-        <div id="now-member" class="now-member"></div>
+        <div class="now-head">
+          <span id="now-member" class="now-member"></span>
+          <span id="now-tags" class="now-tags"></span>
+        </div>
         <div id="now-title" class="now-title"></div>
         <div id="now-caption" class="now-caption"></div>
 
         <div class="nav">
-          <button id="prev-btn" type="button" title="前の用例 (←)">← 前の用例</button>
+          <button id="prev-btn" type="button" title="前の用例 (←)">←&nbsp;前の用例</button>
           <span id="counter" class="counter"></span>
-          <button id="next-btn" type="button" title="次の用例 (→)">次の用例 →</button>
+          <button id="next-btn" type="button" title="次の用例 (→)">次の用例&nbsp;→</button>
         </div>
 
         <div class="controls">
-          <button id="replay-btn" type="button" title="この用例をもう一度 (R)">↻ リプレイ</button>
-          <button id="share-btn" type="button" title="この用例へのリンクをコピー">🔗 共有</button>
-          <label class="ctrl">
-            <input id="loop" type="checkbox" /> ループ (L)
-          </label>
-          <label class="ctrl">
-            <input id="autoplay" type="checkbox" checked /> 連続再生
-          </label>
-          <label class="ctrl speed">
-            速度
-            <select id="speed" title="再生速度">
-              <option value="0.5">0.5×</option>
-              <option value="0.75">0.75×</option>
-              <option value="1" selected>1×</option>
-              <option value="1.25">1.25×</option>
-              <option value="1.5">1.5×</option>
-            </select>
-          </label>
+          <div class="controls-actions">
+            <button id="replay-btn" type="button" title="この用例をもう一度 (R)">↻&nbsp;リプレイ</button>
+            <button id="clip-btn" type="button" title="該当箇所の前後5秒をループ (C)" aria-pressed="false">✂&nbsp;±5秒</button>
+            <button id="loop-btn" type="button" title="この用例をループ (L)" aria-pressed="false">🔁&nbsp;ループ</button>
+            <button id="share-btn" type="button" title="この用例（クリップ）へのリンクをコピー">🔗&nbsp;共有</button>
+          </div>
+          <div class="controls-settings">
+            <label class="ctrl speed">速度
+              <select id="speed" title="再生速度">
+                <option value="0.5">0.5×</option>
+                <option value="0.75">0.75×</option>
+                <option value="1" selected>1×</option>
+                <option value="1.25">1.25×</option>
+                <option value="1.5">1.5×</option>
+              </select>
+            </label>
+            <label class="ctrl"><input id="autoplay" type="checkbox" checked /> 連続再生</label>
+          </div>
         </div>
 
         <details id="ctx-wrap" class="ctx-wrap">
@@ -79,7 +82,7 @@
           <ol id="context" class="context"></ol>
         </details>
 
-        <p class="hint">ショートカット: <kbd>←</kbd>/<kbd>→</kbd> 用例移動 ・ <kbd>Space</kbd> 再生/停止 ・ <kbd>R</kbd> リプレイ ・ <kbd>L</kbd> ループ</p>
+        <p class="hint"><kbd>←</kbd>/<kbd>→</kbd> 用例 ・ <kbd>Space</kbd> 再生/停止 ・ <kbd>R</kbd> リプレイ ・ <kbd>L</kbd> ループ ・ <kbd>C</kbd> ±5秒</p>
       </div>
     </section>
 

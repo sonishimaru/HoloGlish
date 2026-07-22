@@ -42,6 +42,20 @@ def test_export_via_cli(built_db, tmp_path):
     assert os.path.isfile(os.path.join(out, "static", "data.json"))
 
 
+def test_backfill_names(built_db):
+    """backfill-names が既存DBの member_ja を channels.yaml から補完する。"""
+    from pipeline import db, run
+
+    run.main(["--db", built_db, "backfill-names"])
+    conn = db.connect(built_db)
+    row = conn.execute(
+        "SELECT member_ja FROM videos WHERE member = 'Sakura Miko' LIMIT 1"
+    ).fetchone()
+    conn.close()
+    # channels.yaml で Sakura Miko → さくらみこ
+    assert row["member_ja"] == "さくらみこ"
+
+
 def test_export_data_matches_search(built_db, tmp_path):
     """data.json の内容がサーバ検索の母集合と一致する。"""
     from server import search
