@@ -68,6 +68,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
 
     for ch in channels:
         cid, member, branch = ch["channel_id"], ch["member"], ch["branch"]
+        member_ja = ch.get("name_ja") or ""
         lang_order = _lang_order(ch.get("lang"))
         print(f"[channel] {member} ({branch}) {cid}")
         try:
@@ -100,6 +101,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
                     {
                         "video_id": vid,
                         "member": member,
+                        "member_ja": member_ja,
                         "branch": branch,
                         "lang": lang,
                         "title": meta.get("title") or v.get("title", ""),
@@ -152,6 +154,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
             {
                 "video_id": vid,
                 "member": e.get("member", ""),
+                "member_ja": e.get("member_ja", ""),
                 "branch": e.get("branch", ""),
                 "lang": e.get("lang", "ja"),
                 "title": e.get("title", ""),
@@ -167,6 +170,26 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     conn.commit()
     conn.close()
     print(f"完了: 合計 {total} セグメントを取り込み")
+    return 0
+
+
+def cmd_backfill_names(args: argparse.Namespace) -> int:
+    """既存 DB の member_ja を channels.yaml の name_ja で埋める（再収集不要）。"""
+    mapping = {c["member"]: (c.get("name_ja") or "") for c in load_channels()}
+    conn = db.connect(args.db)
+    db.init_db(conn)
+    updated = 0
+    for member, name_ja in mapping.items():
+        if not name_ja:
+            continue
+        cur = conn.execute(
+            "UPDATE videos SET member_ja = ? WHERE member = ? AND (member_ja IS NULL OR member_ja = '')",
+            (name_ja, member),
+        )
+        updated += cur.rowcount
+    conn.commit()
+    conn.close()
+    print(f"完了: {updated} 本の日本語表示名を補完")
     return 0
 
 
@@ -223,6 +246,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     e = sub.add_parser("export", help="静的サイト（クライアント検索）を書き出す")
     e.add_argument("--out", default="site", help="出力ディレクトリ")
     e.set_defaults(func=cmd_export)
+
+    b = sub.add_parser("backfill-names", help="既存DBの日本語表示名を channels.yaml から補完")
+    b.set_defaults(func=cmd_backfill_names)
 
     args = p.parse_args(argv)
     return args.func(args)

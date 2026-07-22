@@ -164,7 +164,7 @@ function renderResults() {
     li.innerHTML = `
       <div class="time">${fmtTime(r.start)}</div>
       <div class="body">
-        <div class="who">${escapeHtml(r.member || "")}
+        <div class="who">${escapeHtml(memberName(r))}
           <span class="badge">${escapeHtml(r.branch || "")}</span>
           <span class="badge">${escapeHtml(r.sub_kind || "")}</span>
         </div>
@@ -183,7 +183,7 @@ function markActiveRow() {
 }
 
 function renderNowPlaying(r) {
-  $("now-member").textContent = `${r.member || ""} ・ ${r.branch || ""} ・ ${r.lang || ""}`;
+  $("now-member").textContent = `${memberName(r)} ・ ${r.branch || ""} ・ ${r.lang || ""}`;
   $("now-title").textContent = r.title || "";
   $("now-caption").innerHTML = highlight(r.text || "", state.query);
   $("counter").textContent = `${state.index + 1} / ${state.results.length}（全 ${state.total} 件）`;
@@ -332,10 +332,18 @@ function fill(sel, items, allLabel) {
   const keep = sel.value;
   sel.innerHTML = `<option value="">${allLabel}</option>`;
   (items || []).forEach((v) => {
+    // 文字列（ブランチ・言語）と {value,label}（メンバー）の両方を許容
+    const value = (v && typeof v === "object") ? v.value : v;
+    const label = (v && typeof v === "object") ? v.label : v;
     const o = document.createElement("option");
-    o.value = v; o.textContent = v; sel.appendChild(o);
+    o.value = value; o.textContent = label; sel.appendChild(o);
   });
   if (keep) sel.value = keep;
+}
+
+// 表示名（日本語優先、無ければ英語表記）
+function memberName(r) {
+  return (r && (r.member_ja || r.member)) || "";
 }
 
 // ---------- ランディング（検索前）: カバレッジ統計 + おすすめ検索 ----------

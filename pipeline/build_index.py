@@ -7,13 +7,14 @@ from typing import List, Dict, Any
 
 
 def upsert_video(conn: sqlite3.Connection, video: Dict[str, Any]) -> None:
+    video = {"member_ja": "", **video}  # 未指定でも欠損しないように既定を補う
     conn.execute(
         """
-        INSERT INTO videos(video_id, member, branch, lang, title, published_at, url, sub_kind)
-        VALUES(:video_id, :member, :branch, :lang, :title, :published_at, :url, :sub_kind)
+        INSERT INTO videos(video_id, member, member_ja, branch, lang, title, published_at, url, sub_kind)
+        VALUES(:video_id, :member, :member_ja, :branch, :lang, :title, :published_at, :url, :sub_kind)
         ON CONFLICT(video_id) DO UPDATE SET
-            member=excluded.member, branch=excluded.branch, lang=excluded.lang,
-            title=excluded.title, published_at=excluded.published_at,
+            member=excluded.member, member_ja=excluded.member_ja, branch=excluded.branch,
+            lang=excluded.lang, title=excluded.title, published_at=excluded.published_at,
             url=excluded.url, sub_kind=excluded.sub_kind
         """,
         video,
