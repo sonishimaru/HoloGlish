@@ -71,6 +71,10 @@ main { max-width: 900px; margin: 0 auto; padding: 0 16px 64px; }
 /* 右列は左列（動画＋操作）と同じ高さに揃え、あふれる本文はキャプション内でスクロール */
 .player-meta { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
 
+/* デスクトップ: プレイヤーのブロックを上部に固定し、下の検索結果リストをスクロール */
+@media (min-width: 721px) {
+  .player-area { position: sticky; top: 8px; z-index: 10; }
+}
 /* モバイル: 縦積み。動画をビューポート上端に固定し、下の情報をスクロール */
 @media (max-width: 720px) {
   .player-area { grid-template-columns: 1fr; align-items: start; }
