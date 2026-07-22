@@ -180,6 +180,11 @@ main { max-width: 900px; margin: 0 auto; padding: 0 16px 64px; }
   background: var(--panel); color: var(--text); cursor: pointer; font-size: .9rem;
 }
 .chip:hover { border-color: var(--accent); color: var(--accent); }
+.linklike {
+  background: none; border: none; color: var(--accent-2); cursor: pointer;
+  font-size: .78rem; padding: 0 0 0 6px; text-decoration: underline;
+}
+.linklike:hover { filter: brightness(1.15); }
 
 .hidden { display: none !important; }
 .footer { text-align: center; color: var(--muted); font-size: .78rem; padding: 24px 16px 40px; }
