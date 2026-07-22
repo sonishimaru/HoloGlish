@@ -1,7 +1,9 @@
 // 検索バックエンドの抽象。
 // - サーバモード（既定）: FastAPI の /api/* を叩く。
-// - 静的モード: config.js が window.HOLOGLISH_DATA_URL を設定していると、
-//   data.json を読み込んでブラウザ内で検索する（サーバ不要）。
+// - 静的モード: config.js が window.HOLOGLISH_INDEX_BASE を設定していると、
+//   シャード化したトリグラム転置索引をブラウザ内で検索する（サーバ不要）。
+//   クエリのトリグラムを含むシャードだけを取得するため、全アーカイブでも
+//   索引全体をダウンロードしない。
 //
 // どちらのモードでも Api.search / Api.context / Api.facets / Api.stats は
 // server/search.py と同じ形の結果を返す。
@@ -16,7 +18,7 @@ const Api = (function () {
   };
 
   // ---------- サーバモード ----------
-  if (!window.HOLOGLISH_DATA_URL) {
+  if (!window.HOLOGLISH_INDEX_BASE) {
     return {
       mode: "server",
       async search(p) { return (await fetch(`/api/search?${qs(p)}`)).json(); },
@@ -26,22 +28,36 @@ const Api = (function () {
     };
   }
 
-  // ---------- 静的モード ----------
-  let store = null;
+  // ---------- 静的モード（シャード索引） ----------
+  const BASE = window.HOLOGLISH_INDEX_BASE.replace(/\/$/, "");
+  let manifest = null;         // {version, shards, videos, segments, facets, stats}
+  let triIndex = null;         // { trigram: [shardBucket, ...] }
+  const shardCache = new Map(); // b -> shard {vids, meta, segs, tri}
 
   async function load() {
-    if (store) return store;
-    const d = await (await fetch(window.HOLOGLISH_DATA_URL)).json();
-    // segments を rowid 相当の配列で保持。videos メタは辞書。
-    store = {
-      videos: d.videos || {},
-      segments: d.segments || [],
-      facets: d.facets || { members: [], branches: [], langs: [] },
-      stats: d.stats || { videos: 0, segments: 0, members: 0, by_branch: {} },
-      // 動画ごとの segment index（context 用）
-      byVideo: null,
-    };
-    return store;
+    if (manifest) return;
+    [manifest, triIndex] = await Promise.all([
+      fetch(`${BASE}/manifest.json`).then((r) => r.json()),
+      fetch(`${BASE}/tri-index.json`).then((r) => r.json()),
+    ]);
+  }
+
+  async function getShard(b) {
+    if (shardCache.has(b)) return shardCache.get(b);
+    const sh = await fetch(`${BASE}/shard-${b}.json`).then((r) => r.json());
+    shardCache.set(b, sh);
+    return sh;
+  }
+  async function getShards(buckets) {
+    return Promise.all(buckets.map(getShard));
+  }
+
+  // Python 側 _trigrams と同一定義（小文字化・3文字窓・相異なる）
+  function trigrams(text) {
+    const t = text.toLowerCase();
+    const s = new Set();
+    for (let i = 0; i + 3 <= t.length; i++) s.add(t.slice(i, i + 3));
+    return [...s];
   }
 
   // server/search.py の _highlight_snippet 相当
@@ -53,90 +69,156 @@ const Api = (function () {
     return (start > 0 ? "…" : "") + text.slice(start, end) + (end < text.length ? "…" : "");
   }
 
-  function matches(seg, v, q, f) {
-    if (f.member && v.member !== f.member) return false;
-    if (f.branch && v.branch !== f.branch) return false;
-    if (f.lang && seg.l !== f.lang) return false;
-    return seg.t.toLowerCase().includes(q);
+  function passFacets(meta, segLang, f) {
+    if (f.member && meta.member !== f.member) return false;
+    if (f.branch && meta.branch !== f.branch) return false;
+    if (f.lang && segLang !== f.lang) return false;
+    return true;
+  }
+
+  // シャード内で、複数トリグラムの posting（[vi,si]）を積集合
+  function intersectPostings(shard, tris) {
+    const lists = tris.map((t) => shard.tri[t] || []);
+    if (lists.some((l) => l.length === 0)) return [];
+    lists.sort((a, b) => a.length - b.length);
+    let cur = new Set(lists[0].map((e) => e[0] + ":" + e[1]));
+    for (let k = 1; k < lists.length && cur.size; k++) {
+      const nxt = new Set(lists[k].map((e) => e[0] + ":" + e[1]));
+      cur = new Set([...cur].filter((key) => nxt.has(key)));
+    }
+    return [...cur].map((key) => key.split(":").map(Number)); // [[vi,si],...]
+  }
+
+  function toResult(shard, vi, si, query) {
+    const meta = shard.meta[vi];
+    const seg = shard.segs[vi][si]; // [start,dur,text,lang]
+    return {
+      video_id: shard.vids[vi],
+      member: meta.member,
+      member_ja: meta.member_ja || "",
+      branch: meta.branch,
+      title: meta.title,
+      url: meta.url,
+      lang: seg[3],
+      sub_kind: meta.sub_kind,
+      start: seg[0],
+      dur: seg[1],
+      text: seg[2],
+      snippet: snippet(seg[2], query),
+    };
+  }
+
+  async function collectHits(query, f) {
+    const q = query.toLowerCase();
+    const hits = [];
+    if (query.length >= 3) {
+      const tris = trigrams(query);
+      // クエリの全トリグラムを含むシャードだけが候補
+      let buckets = null;
+      for (const t of tris) {
+        const bs = triIndex[t];
+        if (!bs) { buckets = []; break; }
+        if (buckets === null) buckets = bs.slice();
+        else { const set = new Set(bs); buckets = buckets.filter((b) => set.has(b)); }
+        if (!buckets.length) break;
+      }
+      buckets = buckets || [];
+      await getShards(buckets);
+      for (const b of buckets) {
+        const shard = shardCache.get(b);
+        for (const [vi, si] of intersectPostings(shard, tris)) {
+          const seg = shard.segs[vi][si];
+          if (!seg[2].toLowerCase().includes(q)) continue; // 実体で部分一致を確認
+          if (!passFacets(shard.meta[vi], seg[3], f)) continue;
+          hits.push({ b, vi, si });
+        }
+      }
+    } else {
+      // 1〜2文字はトリグラム索引が使えない → 全シャードを走査（LIKE 相当）
+      const all = Array.from({ length: manifest.shards }, (_, i) => i);
+      await getShards(all);
+      for (const b of all) {
+        const shard = shardCache.get(b);
+        shard.segs.forEach((segs, vi) => {
+          if (!passFacets(shard.meta[vi], null, f) && !f.lang) return; // member/branch 早期除外
+          segs.forEach((seg, si) => {
+            if (!seg[2].toLowerCase().includes(q)) return;
+            if (!passFacets(shard.meta[vi], seg[3], f)) return;
+            hits.push({ b, vi, si });
+          });
+        });
+      }
+    }
+    return hits;
   }
 
   async function search(p) {
-    const s = await load();
+    await load();
     const query = (p.q || "").trim();
     const sort = p.sort === "relevance" ? "relevance" : "date";
     const page = Math.max(1, parseInt(p.page || 1, 10));
     const pageSize = Math.min(Math.max(parseInt(p.page_size || 20, 10), 1), 100);
     if (!query) return { query, page, page_size: pageSize, total: 0, sort, results: [] };
 
-    const q = query.toLowerCase();
     const f = { member: p.member || "", branch: p.branch || "", lang: p.lang || "" };
+    const hits = await collectHits(query, f);
 
-    const hits = [];
-    for (const seg of s.segments) {
-      const v = s.videos[seg.v];
-      if (!v) continue;
-      if (matches(seg, v, q, f)) hits.push({ seg, v });
-    }
-
-    // 並び替え（server/search.py に対応）
+    const seg = (h) => shardCache.get(h.b).segs[h.vi][h.si];
+    const pub = (h) => shardCache.get(h.b).meta[h.vi].published_at || "";
     if (sort === "relevance") {
-      // 語が目立つ短い発話を優先（LIKE 経路の近似と同じ）
-      hits.sort((a, b) => a.seg.t.length - b.seg.t.length ||
-        (b.v.published_at || "").localeCompare(a.v.published_at || ""));
+      hits.sort((a, b) => seg(a)[2].length - seg(b)[2].length ||
+        pub(b).localeCompare(pub(a)));
     } else {
-      hits.sort((a, b) => (b.v.published_at || "").localeCompare(a.v.published_at || "") ||
-        a.seg.s - b.seg.s);
+      hits.sort((a, b) => pub(b).localeCompare(pub(a)) || seg(a)[0] - seg(b)[0]);
     }
 
     const total = hits.length;
     const offset = (page - 1) * pageSize;
-    const results = hits.slice(offset, offset + pageSize).map(({ seg, v }) => ({
-      video_id: seg.v,
-      member: v.member,
-      member_ja: v.member_ja || "",
-      branch: v.branch,
-      title: v.title,
-      url: v.url,
-      lang: seg.l,
-      sub_kind: v.sub_kind,
-      start: seg.s,
-      dur: seg.d,
-      text: seg.t,
-      snippet: snippet(seg.t, query),
-    }));
+    const results = hits.slice(offset, offset + pageSize)
+      .map((h) => toResult(shardCache.get(h.b), h.vi, h.si, query));
     return { query, page, page_size: pageSize, total, sort, results };
   }
 
-  async function context(p) {
-    const s = await load();
-    const videoId = p.video_id;
-    const start = parseFloat(p.start || 0);
-    let window_ = parseInt(p.window || 3, 10);
-    window_ = Math.max(0, Math.min(window_, 20));
-
-    const v = s.videos[videoId] || null;
-    if (!v) return { video_id: videoId, video: null, segments: [] };
-
-    if (!s.byVideo) {
-      s.byVideo = {};
-      for (const seg of s.segments) (s.byVideo[seg.v] = s.byVideo[seg.v] || []).push(seg);
-      for (const k in s.byVideo) s.byVideo[k].sort((a, b) => a.s - b.s);
+  // 取得済みシャードから video を探す（検索でその用例のシャードは取得済み）
+  function findVideo(videoId) {
+    for (const shard of shardCache.values()) {
+      const vi = shard.vids.indexOf(videoId);
+      if (vi >= 0) return { shard, vi };
     }
-    const rows = s.byVideo[videoId] || [];
-    if (!rows.length) return { video_id: videoId, video: { member: v.member, ...v }, segments: [] };
-
-    let center = 0, best = Infinity;
-    rows.forEach((r, i) => { const d = Math.abs(r.s - start); if (d < best) { best = d; center = i; } });
-    const lo = Math.max(0, center - window_);
-    const hi = Math.min(rows.length, center + window_ + 1);
-    const segments = rows.slice(lo, hi).map((r, i) => ({
-      start: r.s, dur: r.d, text: r.t, is_current: (lo + i) === center,
-    }));
-    return { video_id: videoId, video: v, segments };
+    return null;
   }
 
-  async function facets() { return (await load()).facets; }
-  async function stats() { return (await load()).stats; }
+  async function context(p) {
+    await load();
+    const videoId = p.video_id;
+    const start = parseFloat(p.start || 0);
+    let win = parseInt(p.window || 3, 10);
+    win = Math.max(0, Math.min(win, 20));
+
+    let hit = findVideo(videoId);
+    if (!hit && manifest.shards <= 16) { // 未取得なら小規模時のみ全ロードして再探索
+      await getShards(Array.from({ length: manifest.shards }, (_, i) => i));
+      hit = findVideo(videoId);
+    }
+    if (!hit) return { video_id: videoId, video: null, segments: [] };
+
+    const meta = hit.shard.meta[hit.vi];
+    const rows = hit.shard.segs[hit.vi]; // 時刻順 [start,dur,text,lang]
+    if (!rows.length) return { video_id: videoId, video: meta, segments: [] };
+
+    let center = 0, best = Infinity;
+    rows.forEach((r, i) => { const d = Math.abs(r[0] - start); if (d < best) { best = d; center = i; } });
+    const lo = Math.max(0, center - win);
+    const hi = Math.min(rows.length, center + win + 1);
+    const segments = [];
+    for (let i = lo; i < hi; i++) {
+      segments.push({ start: rows[i][0], dur: rows[i][1], text: rows[i][2], is_current: i === center });
+    }
+    return { video_id: videoId, video: meta, segments };
+  }
+
+  async function facets() { await load(); return manifest.facets; }
+  async function stats() { await load(); return manifest.stats; }
 
   return { mode: "static", search, context, facets, stats };
 })();
