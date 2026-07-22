@@ -16,6 +16,7 @@ const state = {
   loop: false,
   clipMode: false, // ±5秒クリップ: 該当箇所の前後を強調ループ
   clipRadius: 5,
+  preroll: 2,      // 既定の再生開始を該当語の何秒前にするか（頭出しの余裕）
   player: null,
   playerReady: false,
   pollTimer: null,
@@ -44,10 +45,11 @@ function applySpeed() {
   }
 }
 
-// 再生開始位置: クリップモードなら「該当箇所の clipRadius 秒前」から
+// 再生開始位置: クリップモードなら該当箇所の clipRadius 秒前、
+// 通常は該当語の preroll 秒前（頭出しの余裕）から始める。
 function clipStartSeconds(r) {
-  const base = state.clipMode ? r.start - state.clipRadius : r.start;
-  return Math.max(0, Math.floor(base));
+  const lead = state.clipMode ? state.clipRadius : state.preroll;
+  return Math.max(0, Math.floor(r.start - lead));
 }
 
 // 再生終端: クリップモードなら「該当箇所の clipRadius 秒後」、
