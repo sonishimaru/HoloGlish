@@ -1,0 +1,6 @@
+{"events":[
+  {"tStartMs":2000,"dDurationMs":2600,"segs":[{"utf8":"おはよう"},{"utf8":"ございます"}]},
+  {"tStartMs":6000,"dDurationMs":3200,"segs":[{"utf8":"今日の歌枠"},{"utf8":"よろしくお願いします"}]},
+  {"tStartMs":10500,"dDurationMs":2400,"segs":[{"utf8":"最初の曲"},{"utf8":"いきます"}]},
+  {"tStartMs":15000,"dDurationMs":2200,"segs":[{"utf8":"ありがとう"},{"utf8":"みんな"}]}
+]}

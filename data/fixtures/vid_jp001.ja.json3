@@ -1,0 +1,7 @@
+{"events":[
+  {"tStartMs":1500,"dDurationMs":2500,"segs":[{"utf8":"みなさん"},{"utf8":"おはようございます"}]},
+  {"tStartMs":4200,"dDurationMs":3000,"segs":[{"utf8":"今日も配信"},{"utf8":"始めていきます"}]},
+  {"tStartMs":8000,"dDurationMs":2200,"segs":[{"utf8":"おはよう"},{"utf8":"みんな元気？"}]},
+  {"tStartMs":12500,"dDurationMs":2800,"segs":[{"utf8":"ぺこ"},{"utf8":"今日はゲームやるぺこ"}]},
+  {"tStartMs":16000,"dDurationMs":2000,"segs":[{"utf8":"それでは"},{"utf8":"いってみよう"}]}
+]}

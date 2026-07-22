@@ -1,0 +1,69 @@
+name: Deploy Pages
+
+# 収集済み索引から静的サイトを生成し、GitHub Pages で公開する。
+# ブラウザから URL で開け、検索はクライアントサイド（サーバ不要）で動く。
+#
+# 事前設定: リポジトリ Settings → Pages → Build and deployment → Source を
+# "GitHub Actions" にしておくこと（初回のみ）。
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "pipeline/export_static.py"
+      - ".github/workflows/pages.yml"
+  # 定期収集が終わったら最新の索引で再公開
+  workflow_run:
+    workflows: ["Scheduled Collect"]
+    types: [completed]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        # export は PyYAML のみで動く（yt-dlp / fastapi は不要）
+        run: pip install PyYAML
+
+      - name: Prepare index (collected or fixtures fallback)
+        run: |
+          mkdir -p data
+          if git fetch origin hologlish-data:hologlish-data 2>/dev/null \
+             && git show hologlish-data:hologlish.db > data/hologlish.db 2>/dev/null \
+             && [ -s data/hologlish.db ]; then
+            echo "収集済み索引 (hologlish-data) を使用します"
+          else
+            echo "索引が無いためフィクスチャで生成します"
+            python -m pipeline.run ingest --manifest data/fixtures/manifest.json
+          fi
+
+      - name: Build static site
+        run: python -m pipeline.run export --out site
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4

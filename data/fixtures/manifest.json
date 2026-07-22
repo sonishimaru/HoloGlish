@@ -1,0 +1,32 @@
+[
+  {
+    "video_id": "vid_jp001",
+    "member": "Usada Pekora",
+    "branch": "jp",
+    "lang": "ja",
+    "title": "【サンプル】今日もゲーム配信ぺこ",
+    "published_at": "20240110",
+    "sub_kind": "manual",
+    "subtitle_file": "vid_jp001.ja.json3"
+  },
+  {
+    "video_id": "vid_jp002",
+    "member": "Sakura Miko",
+    "branch": "jp",
+    "lang": "ja",
+    "title": "【サンプル】朝の歌枠",
+    "published_at": "20240112",
+    "sub_kind": "manual",
+    "subtitle_file": "vid_jp002.ja.json3"
+  },
+  {
+    "video_id": "vid_en001",
+    "member": "Gawr Gura",
+    "branch": "en",
+    "lang": "en",
+    "title": "[sample] morning stream",
+    "published_at": "20240111",
+    "sub_kind": "auto",
+    "subtitle_file": "vid_en001.en.json3"
+  }
+]

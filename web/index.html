@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HoloGlish — ホロライブ版 YouGlish</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1 class="logo">HoloGlish</h1>
+    <p class="tagline">ホロライブ配信の中から、その言葉が話されている場面を探す</p>
+  </header>
+
+  <main>
+    <form id="search-form" class="search">
+      <input id="q" type="text" placeholder="例: おはよ、ぺこ、hello …" autocomplete="off" autofocus />
+      <button type="submit">検索</button>
+    </form>
+
+    <div class="filters">
+      <select id="f-branch"><option value="">全ブランチ</option></select>
+      <select id="f-member"><option value="">全メンバー</option></select>
+      <select id="f-lang"><option value="">全言語</option></select>
+      <select id="f-sort" title="並び順">
+        <option value="date">新着順</option>
+        <option value="relevance">一致度順</option>
+      </select>
+    </div>
+
+    <div id="status" class="status"></div>
+
+    <section id="landing" class="landing hidden">
+      <p id="coverage" class="coverage"></p>
+      <div class="suggest-wrap">
+        <span class="suggest-label">試しに検索:</span>
+        <div id="suggestions" class="suggestions"></div>
+      </div>
+    </section>
+
+    <section id="player-area" class="player-area hidden">
+      <div class="player-wrap">
+        <div id="player"></div>
+      </div>
+      <div class="player-meta">
+        <div id="now-member" class="now-member"></div>
+        <div id="now-title" class="now-title"></div>
+        <div id="now-caption" class="now-caption"></div>
+
+        <div class="nav">
+          <button id="prev-btn" type="button" title="前の用例 (←)">← 前の用例</button>
+          <span id="counter" class="counter"></span>
+          <button id="next-btn" type="button" title="次の用例 (→)">次の用例 →</button>
+        </div>
+
+        <div class="controls">
+          <button id="replay-btn" type="button" title="この用例をもう一度 (R)">↻ リプレイ</button>
+          <button id="share-btn" type="button" title="この用例へのリンクをコピー">🔗 共有</button>
+          <label class="ctrl">
+            <input id="loop" type="checkbox" /> ループ (L)
+          </label>
+          <label class="ctrl">
+            <input id="autoplay" type="checkbox" checked /> 連続再生
+          </label>
+          <label class="ctrl speed">
+            速度
+            <select id="speed" title="再生速度">
+              <option value="0.5">0.5×</option>
+              <option value="0.75">0.75×</option>
+              <option value="1" selected>1×</option>
+              <option value="1.25">1.25×</option>
+              <option value="1.5">1.5×</option>
+            </select>
+          </label>
+        </div>
+
+        <details id="ctx-wrap" class="ctx-wrap">
+          <summary>前後のトランスクリプトを表示</summary>
+          <ol id="context" class="context"></ol>
+        </details>
+
+        <p class="hint">ショートカット: <kbd>←</kbd>/<kbd>→</kbd> 用例移動 ・ <kbd>Space</kbd> 再生/停止 ・ <kbd>R</kbd> リプレイ ・ <kbd>L</kbd> ループ</p>
+      </div>
+    </section>
+
+    <ul id="results" class="results"></ul>
+    <div id="pager" class="pager"></div>
+  </main>
+
+  <footer class="footer">
+    <p>字幕は索引用に取得し、再生は YouTube 公式プレイヤー経由です。非公式のファンツールであり、カバー(hololive production)とは無関係です。</p>
+  </footer>
+
+  <script src="/static/config.js"></script>
+  <!-- プレイヤー用の外部スクリプトは async で読み込み、検索UIの初期化をブロックしない。
+       準備完了時に window.onYouTubeIframeAPIReady（app.js で定義）が呼ばれる。 -->
+  <script src="https://www.youtube.com/iframe_api" async></script>
+  <script src="/static/api.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

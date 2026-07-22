@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Data (収集した字幕・生成したインデックスはコミットしない)
+data/raw/
+data/*.db
+data/*.db-*
+
+# 静的サイトの書き出し（export の出力）
+/site/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
