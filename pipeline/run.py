@@ -170,6 +170,21 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_export(args: argparse.Namespace) -> int:
+    """収集済み索引を静的サイトへ書き出す（サーバ不要のブラウザ検索）。"""
+    from .export_static import export_site
+
+    conn = db.connect(args.db)
+    db.init_db(conn)
+    info = export_site(conn, args.out)
+    conn.close()
+    print(
+        f"完了: {info['out_dir']} に静的サイトを書き出し"
+        f"（{info['videos']} 本 / {info['segments']} 発話 / {info['members']} メンバー）"
+    )
+    return 0
+
+
 def _split(csv: Optional[str]) -> Optional[List[str]]:
     if not csv:
         return None
@@ -204,6 +219,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     g = sub.add_parser("ingest", help="ローカル字幕ファイルを取り込み（オフライン）")
     g.add_argument("--manifest", required=True, help="manifest.json パス")
     g.set_defaults(func=cmd_ingest)
+
+    e = sub.add_parser("export", help="静的サイト（クライアント検索）を書き出す")
+    e.add_argument("--out", default="site", help="出力ディレクトリ")
+    e.set_defaults(func=cmd_export)
 
     args = p.parse_args(argv)
     return args.func(args)

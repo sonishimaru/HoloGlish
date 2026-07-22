@@ -178,8 +178,7 @@ async function loadContext(r) {
   const token = ++state.ctxToken;
   box.innerHTML = "";
   try {
-    const params = new URLSearchParams({ video_id: r.video_id, start: r.start, window: 3 });
-    const data = await (await fetch(`/api/context?${params}`)).json();
+    const data = await Api.context({ video_id: r.video_id, start: r.start, window: 3 });
     if (token !== state.ctxToken) return; // 古いレスポンスは破棄
     (data.segments || []).forEach((s) => {
       const li = document.createElement("li");
@@ -244,18 +243,15 @@ function readHash() {
 // ---------- API ----------
 async function loadPage(page, playFirst = false) {
   page = Math.max(1, page);
-  const params = new URLSearchParams({ q: state.query, page, page_size: state.pageSize });
   const branch = $("f-branch").value, member = $("f-member").value, lang = $("f-lang").value;
-  if (branch) params.set("branch", branch);
-  if (member) params.set("member", member);
-  if (lang) params.set("lang", lang);
-  if (state.sort) params.set("sort", state.sort);
 
   writeHash();
   hideLanding();
   $("status").textContent = "検索中…";
-  const res = await fetch(`/api/search?${params}`);
-  const data = await res.json();
+  const data = await Api.search({
+    q: state.query, page, page_size: state.pageSize,
+    branch, member, lang, sort: state.sort,
+  });
 
   state.results = data.results || [];
   state.total = data.total || 0;
@@ -286,7 +282,7 @@ async function doSearch(e) {
 
 async function loadFacets() {
   try {
-    const data = await (await fetch("/api/facets")).json();
+    const data = await Api.facets();
     fill($("f-branch"), data.branches, "全ブランチ");
     fill($("f-member"), data.members, "全メンバー");
     fill($("f-lang"), data.langs, "全言語");
@@ -321,7 +317,7 @@ async function loadLanding() {
     sug.appendChild(b);
   });
   try {
-    const s = await (await fetch("/api/stats")).json();
+    const s = await Api.stats();
     if (s.videos > 0) {
       $("coverage").textContent =
         `${s.members} メンバー・${s.videos} 本の配信・${s.segments.toLocaleString()} 発話から検索`;

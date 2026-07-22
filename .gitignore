@@ -10,6 +10,9 @@ data/raw/
 data/*.db
 data/*.db-*
 
+# 静的サイトの書き出し（export の出力）
+/site/
+
 # OS / editor
 .DS_Store
 .idea/
