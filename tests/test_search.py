@@ -76,3 +76,44 @@ def test_special_chars_do_not_crash(conn):
     # FTS の予約文字や LIKE のワイルドカードを含む語でも例外を出さない
     for q in ['"', "AND", "50%", "under_score", "a*b"]:
         search.search(conn, q)
+
+
+def test_sort_relevance_returns_same_set(conn):
+    # 並び順を変えても総件数と結果集合は一致する
+    by_date = search.search(conn, "おはよう", sort="date")
+    by_rel = search.search(conn, "おはよう", sort="relevance")
+    assert by_rel["sort"] == "relevance"
+    assert by_rel["total"] == by_date["total"] == 3
+    key = lambda r: {(x["video_id"], x["start"]) for x in r["results"]}
+    assert key(by_rel) == key(by_date)
+
+
+def test_sort_invalid_falls_back_to_date(conn):
+    r = search.search(conn, "おはよう", sort="bogus")
+    assert r["sort"] == "date"
+
+
+def test_sort_relevance_like_path(conn):
+    # 2文字（LIKE 経路）でも relevance 指定が落ちない
+    r = search.search(conn, "ぺこ", sort="relevance")
+    assert r["sort"] == "relevance"
+    assert r["total"] == 1
+
+
+def test_context_window(conn):
+    r = search.search(conn, "おはよう", member="Sakura Miko")
+    hit = r["results"][0]
+    ctx = search.context(conn, hit["video_id"], start=hit["start"], window=2)
+    assert ctx["video"]["member"] == "Sakura Miko"
+    assert ctx["segments"], "文脈が空でない"
+    current = [s for s in ctx["segments"] if s["is_current"]]
+    assert len(current) == 1
+    assert abs(current[0]["start"] - hit["start"]) < 1e-6
+    # window=2 なら最大 5 件（中心±2）
+    assert len(ctx["segments"]) <= 5
+
+
+def test_context_unknown_video(conn):
+    ctx = search.context(conn, "does-not-exist", start=0.0)
+    assert ctx["video"] is None
+    assert ctx["segments"] == []

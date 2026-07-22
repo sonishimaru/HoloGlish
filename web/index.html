@@ -22,6 +22,10 @@
       <select id="f-branch"><option value="">全ブランチ</option></select>
       <select id="f-member"><option value="">全メンバー</option></select>
       <select id="f-lang"><option value="">全言語</option></select>
+      <select id="f-sort" title="並び順">
+        <option value="date">新着順</option>
+        <option value="relevance">一致度順</option>
+      </select>
     </div>
 
     <div id="status" class="status"></div>
@@ -34,14 +38,39 @@
         <div id="now-member" class="now-member"></div>
         <div id="now-title" class="now-title"></div>
         <div id="now-caption" class="now-caption"></div>
+
         <div class="nav">
-          <button id="prev-btn" type="button">← 前の用例</button>
+          <button id="prev-btn" type="button" title="前の用例 (←)">← 前の用例</button>
           <span id="counter" class="counter"></span>
-          <button id="next-btn" type="button">次の用例 →</button>
+          <button id="next-btn" type="button" title="次の用例 (→)">次の用例 →</button>
         </div>
-        <label class="autoplay">
-          <input id="autoplay" type="checkbox" checked /> 用例を連続再生
-        </label>
+
+        <div class="controls">
+          <button id="replay-btn" type="button" title="この用例をもう一度 (R)">↻ リプレイ</button>
+          <label class="ctrl">
+            <input id="loop" type="checkbox" /> ループ (L)
+          </label>
+          <label class="ctrl">
+            <input id="autoplay" type="checkbox" checked /> 連続再生
+          </label>
+          <label class="ctrl speed">
+            速度
+            <select id="speed" title="再生速度">
+              <option value="0.5">0.5×</option>
+              <option value="0.75">0.75×</option>
+              <option value="1" selected>1×</option>
+              <option value="1.25">1.25×</option>
+              <option value="1.5">1.5×</option>
+            </select>
+          </label>
+        </div>
+
+        <details id="ctx-wrap" class="ctx-wrap">
+          <summary>前後のトランスクリプトを表示</summary>
+          <ol id="context" class="context"></ol>
+        </details>
+
+        <p class="hint">ショートカット: <kbd>←</kbd>/<kbd>→</kbd> 用例移動 ・ <kbd>Space</kbd> 再生/停止 ・ <kbd>R</kbd> リプレイ ・ <kbd>L</kbd> ループ</p>
       </div>
     </section>
 

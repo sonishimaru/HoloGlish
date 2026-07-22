@@ -1,6 +1,8 @@
 // HoloGlish フロントエンド
 // - /api/search を叩いて結果を表示
 // - YouTube IFrame Player で該当秒から再生、prev/next で用例を巡回、連続再生に対応
+// - 再生速度・ループ・リプレイ・キーボード操作・前後トランスクリプト（/api/context）
+// - 検索条件は URL ハッシュに反映され、共有・リロードで復元できる
 
 const state = {
   results: [],
@@ -9,9 +11,13 @@ const state = {
   pageSize: 20,
   total: 0,
   query: "",
+  sort: "date",
+  speed: 1,
+  loop: false,
   player: null,
   playerReady: false,
   pollTimer: null,
+  ctxToken: 0,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -21,10 +27,19 @@ window.onYouTubeIframeAPIReady = function () {
   state.player = new YT.Player("player", {
     playerVars: { playsinline: 1, rel: 0 },
     events: {
-      onReady: () => { state.playerReady = true; },
+      onReady: () => {
+        state.playerReady = true;
+        applySpeed();
+      },
     },
   });
 };
+
+function applySpeed() {
+  if (state.playerReady && state.player && state.player.setPlaybackRate) {
+    try { state.player.setPlaybackRate(state.speed); } catch (_) { /* noop */ }
+  }
+}
 
 function playCurrent() {
   const r = state.results[state.index];
@@ -32,9 +47,13 @@ function playCurrent() {
   $("player-area").classList.remove("hidden");
   renderNowPlaying(r);
   markActiveRow();
+  loadContext(r);
 
   const startSeconds = Math.max(0, Math.floor(r.start));
-  const doLoad = () => state.player.loadVideoById({ videoId: r.video_id, startSeconds });
+  const doLoad = () => {
+    state.player.loadVideoById({ videoId: r.video_id, startSeconds });
+    applySpeed();
+  };
   if (state.playerReady && state.player && state.player.loadVideoById) {
     doLoad();
   } else {
@@ -46,20 +65,40 @@ function playCurrent() {
   startSegmentWatch(r);
 }
 
-// セグメント終端で次の用例へ（連続再生）
+// セグメント終端の監視: ループなら先頭へ、連続再生なら次の用例へ
 function startSegmentWatch(r) {
   if (state.pollTimer) clearInterval(state.pollTimer);
+  const startSeconds = Math.max(0, Math.floor(r.start));
   const end = r.start + Math.max(r.dur || 0, 2) + 1.0; // 余韻を少し
   state.pollTimer = setInterval(() => {
     if (!state.playerReady || !state.player.getCurrentTime) return;
     const t = state.player.getCurrentTime();
     if (t >= end) {
+      if (state.loop) {
+        state.player.seekTo(startSeconds, true); // 同じ用例を繰り返す
+        return;
+      }
       clearInterval(state.pollTimer);
       if ($("autoplay").checked && state.index < state.results.length - 1) {
         goNext();
       }
     }
   }, 300);
+}
+
+function replayCurrent() {
+  const r = state.results[state.index];
+  if (!r || !state.playerReady) return;
+  state.player.seekTo(Math.max(0, Math.floor(r.start)), true);
+  state.player.playVideo();
+  startSegmentWatch(r);
+}
+
+function togglePlay() {
+  if (!state.playerReady || !state.player.getPlayerState) return;
+  const s = state.player.getPlayerState();
+  if (s === YT.PlayerState.PLAYING) state.player.pauseVideo();
+  else state.player.playVideo();
 }
 
 function goNext() {
@@ -71,15 +110,21 @@ function goPrev() {
 }
 
 // ---------- レンダリング ----------
+// クエリ語の全出現箇所をハイライト（大小文字無視）
 function highlight(text, q) {
   if (!q) return escapeHtml(text);
-  const i = text.toLowerCase().indexOf(q.toLowerCase());
-  if (i < 0) return escapeHtml(text);
-  return (
-    escapeHtml(text.slice(0, i)) +
-    "<mark>" + escapeHtml(text.slice(i, i + q.length)) + "</mark>" +
-    escapeHtml(text.slice(i + q.length))
-  );
+  const lower = text.toLowerCase();
+  const needle = q.toLowerCase();
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const hit = lower.indexOf(needle, i);
+    if (hit < 0) { out += escapeHtml(text.slice(i)); break; }
+    out += escapeHtml(text.slice(i, hit));
+    out += "<mark>" + escapeHtml(text.slice(hit, hit + q.length)) + "</mark>";
+    i = hit + q.length;
+  }
+  return out;
 }
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) =>
@@ -127,6 +172,31 @@ function renderNowPlaying(r) {
   $("prev-btn").disabled = state.index <= 0;
 }
 
+// 前後のトランスクリプト（YouGlish 風）
+async function loadContext(r) {
+  const box = $("context");
+  const token = ++state.ctxToken;
+  box.innerHTML = "";
+  try {
+    const params = new URLSearchParams({ video_id: r.video_id, start: r.start, window: 3 });
+    const data = await (await fetch(`/api/context?${params}`)).json();
+    if (token !== state.ctxToken) return; // 古いレスポンスは破棄
+    (data.segments || []).forEach((s) => {
+      const li = document.createElement("li");
+      li.className = "ctx-line" + (s.is_current ? " current" : "");
+      li.innerHTML = `<span class="ctx-t">${fmtTime(s.start)}</span>` +
+        `<span class="ctx-x">${highlight(s.text || "", state.query)}</span>`;
+      li.addEventListener("click", () => {
+        if (state.playerReady) {
+          state.player.seekTo(Math.max(0, Math.floor(s.start)), true);
+          state.player.playVideo();
+        }
+      });
+      box.appendChild(li);
+    });
+  } catch (_) { /* 文脈は補助情報なので失敗しても本体は動く */ }
+}
+
 function renderPager() {
   const pager = $("pager");
   const pages = Math.ceil(state.total / state.pageSize) || 1;
@@ -146,6 +216,31 @@ function renderPager() {
   pager.append(prev, info, next);
 }
 
+// ---------- URL 同期（共有・復元） ----------
+function writeHash() {
+  const p = new URLSearchParams();
+  if (state.query) p.set("q", state.query);
+  const branch = $("f-branch").value, member = $("f-member").value, lang = $("f-lang").value;
+  if (branch) p.set("branch", branch);
+  if (member) p.set("member", member);
+  if (lang) p.set("lang", lang);
+  if (state.sort && state.sort !== "date") p.set("sort", state.sort);
+  const s = p.toString();
+  const next = s ? `#${s}` : "#";
+  if (location.hash !== next) history.replaceState(null, "", next);
+}
+
+function readHash() {
+  const p = new URLSearchParams(location.hash.replace(/^#/, ""));
+  return {
+    q: p.get("q") || "",
+    branch: p.get("branch") || "",
+    member: p.get("member") || "",
+    lang: p.get("lang") || "",
+    sort: p.get("sort") || "date",
+  };
+}
+
 // ---------- API ----------
 async function loadPage(page, playFirst = false) {
   page = Math.max(1, page);
@@ -154,7 +249,9 @@ async function loadPage(page, playFirst = false) {
   if (branch) params.set("branch", branch);
   if (member) params.set("member", member);
   if (lang) params.set("lang", lang);
+  if (state.sort) params.set("sort", state.sort);
 
+  writeHash();
   $("status").textContent = "検索中…";
   const res = await fetch(`/api/search?${params}`);
   const data = await res.json();
@@ -195,17 +292,67 @@ async function loadFacets() {
   } catch (_) { /* DB 未生成でも UI は動く */ }
 }
 function fill(sel, items, allLabel) {
+  const keep = sel.value;
   sel.innerHTML = `<option value="">${allLabel}</option>`;
   (items || []).forEach((v) => {
     const o = document.createElement("option");
     o.value = v; o.textContent = v; sel.appendChild(o);
   });
+  if (keep) sel.value = keep;
+}
+
+// ---------- キーボード操作 ----------
+function onKey(e) {
+  // 入力欄では横取りしない（← → で文字カーソルを動かせるように）
+  const tag = (e.target.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "textarea" || tag === "select") return;
+  if (state.index < 0) return;
+  switch (e.key) {
+    case "ArrowRight": e.preventDefault(); goNext(); break;
+    case "ArrowLeft": e.preventDefault(); goPrev(); break;
+    case " ": e.preventDefault(); togglePlay(); break;
+    case "r": case "R": e.preventDefault(); replayCurrent(); break;
+    case "l": case "L":
+      e.preventDefault();
+      $("loop").checked = !$("loop").checked;
+      state.loop = $("loop").checked;
+      break;
+  }
 }
 
 // ---------- 初期化 ----------
-$("search-form").addEventListener("submit", doSearch);
-$("next-btn").addEventListener("click", goNext);
-$("prev-btn").addEventListener("click", goPrev);
-["f-branch", "f-member", "f-lang"].forEach((id) =>
-  $(id).addEventListener("change", () => { if (state.query) loadPage(1, true); }));
-loadFacets();
+function init() {
+  const h = readHash();
+  if (h.sort === "relevance") { state.sort = "relevance"; $("f-sort").value = "relevance"; }
+
+  $("search-form").addEventListener("submit", doSearch);
+  $("next-btn").addEventListener("click", goNext);
+  $("prev-btn").addEventListener("click", goPrev);
+  $("replay-btn").addEventListener("click", replayCurrent);
+  $("loop").addEventListener("change", () => { state.loop = $("loop").checked; });
+  $("speed").addEventListener("change", () => {
+    state.speed = parseFloat($("speed").value) || 1;
+    applySpeed();
+  });
+  $("f-sort").addEventListener("change", () => {
+    state.sort = $("f-sort").value;
+    if (state.query) loadPage(1, true);
+  });
+  ["f-branch", "f-member", "f-lang"].forEach((id) =>
+    $(id).addEventListener("change", () => { if (state.query) loadPage(1, true); }));
+  document.addEventListener("keydown", onKey);
+
+  loadFacets().then(() => {
+    // ハッシュにフィルタがあれば復元して自動検索
+    if (h.branch) $("f-branch").value = h.branch;
+    if (h.member) $("f-member").value = h.member;
+    if (h.lang) $("f-lang").value = h.lang;
+    if (h.q) {
+      $("q").value = h.q;
+      state.query = h.q;
+      loadPage(1, true);
+    }
+  });
+}
+
+init();

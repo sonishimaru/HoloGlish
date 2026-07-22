@@ -75,8 +75,38 @@ main { max-width: 900px; margin: 0 auto; padding: 0 16px 64px; }
   color: var(--text); border-radius: 8px; cursor: pointer;
 }
 .nav button:hover { border-color: var(--accent); }
+.nav button:disabled { opacity: .4; cursor: default; }
 .counter { color: var(--muted); font-size: .85rem; white-space: nowrap; }
-.autoplay { color: var(--muted); font-size: .85rem; }
+
+.controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.controls button {
+  padding: 6px 12px; border: 1px solid var(--panel-2); background: var(--panel-2);
+  color: var(--text); border-radius: 8px; cursor: pointer; font-size: .85rem;
+}
+.controls button:hover { border-color: var(--accent); }
+.controls .ctrl { color: var(--muted); font-size: .85rem; display: inline-flex; align-items: center; gap: 4px; }
+.controls .speed select {
+  padding: 2px 6px; border-radius: 6px; background: var(--panel);
+  color: var(--text); border: 1px solid var(--panel-2);
+}
+
+.ctx-wrap { font-size: .9rem; }
+.ctx-wrap > summary { cursor: pointer; color: var(--muted); font-size: .82rem; }
+.context { list-style: none; padding: 6px 0 0; margin: 0; display: flex; flex-direction: column; gap: 2px; }
+.ctx-line {
+  display: flex; gap: 8px; padding: 4px 6px; border-radius: 6px; cursor: pointer;
+  color: var(--muted);
+}
+.ctx-line:hover { background: var(--panel-2); }
+.ctx-line.current { color: var(--text); background: var(--panel-2); font-weight: 600; }
+.ctx-line .ctx-t { font-variant-numeric: tabular-nums; color: var(--accent); min-width: 46px; }
+.ctx-line .ctx-x mark { background: transparent; color: var(--hi); font-weight: 700; }
+
+.hint { color: var(--muted); font-size: .74rem; margin: 4px 0 0; }
+.hint kbd {
+  background: var(--panel-2); border-radius: 4px; padding: 1px 5px;
+  font-family: inherit; font-size: .72rem;
+}
 
 .results { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
 .result {

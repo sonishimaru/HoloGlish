@@ -39,13 +39,28 @@ def api_search(
     lang: str | None = None,
     page: int = 1,
     page_size: int = 20,
+    sort: str = Query("date", description="date（新着順）/ relevance（一致度順）"),
 ):
     conn = _conn()
     try:
         return _search.search(
             conn, q, member=member, branch=branch, lang=lang,
-            page=page, page_size=min(max(page_size, 1), 100),
+            page=page, page_size=min(max(page_size, 1), 100), sort=sort,
         )
+    finally:
+        conn.close()
+
+
+@app.get("/api/context")
+def api_context(
+    video_id: str = Query(..., description="対象動画ID"),
+    start: float = Query(0.0, description="中心にする時点（秒）"),
+    window: int = Query(3, description="前後に返す発話数"),
+):
+    """用例の前後文脈（トランスクリプト）を返す。"""
+    conn = _conn()
+    try:
+        return _search.context(conn, video_id, start=start, window=window)
     finally:
         conn.close()
 
