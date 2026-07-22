@@ -121,6 +121,14 @@ function toggleClip(force) {
   if (state.index >= 0) { replayCurrent(); writeHash(); }
 }
 
+// ループの ON/OFF（用例をそのまま繰り返す）。
+function toggleLoop(force) {
+  state.loop = (typeof force === "boolean") ? force : !state.loop;
+  const btn = $("loop-btn");
+  btn.classList.toggle("active", state.loop);
+  btn.setAttribute("aria-pressed", String(state.loop));
+}
+
 // 再生中の用例へのリンクをコピー（YouGlish の共有相当）
 async function shareCurrent() {
   if (state.index < 0) return;
@@ -189,7 +197,7 @@ function renderResults() {
     li.innerHTML = `
       <div class="time">${fmtTime(r.start)}</div>
       <div class="body">
-        <div class="who">${escapeHtml(memberName(r))}
+        <div class="who"><span class="who-name">${escapeHtml(memberName(r))}</span>
           <span class="badge">${escapeHtml(r.branch || "")}</span>
           <span class="badge">${escapeHtml(r.sub_kind || "")}</span>
         </div>
@@ -208,7 +216,10 @@ function markActiveRow() {
 }
 
 function renderNowPlaying(r) {
-  $("now-member").textContent = `${memberName(r)} ・ ${r.branch || ""} ・ ${r.lang || ""}`;
+  $("now-member").textContent = memberName(r);
+  $("now-tags").innerHTML =
+    `<span class="tag">${escapeHtml(r.branch || "")}</span>` +
+    `<span class="tag">${escapeHtml(r.lang || "")}</span>`;
   $("now-title").textContent = r.title || "";
   $("now-caption").innerHTML = highlight(r.text || "", state.query);
   $("counter").textContent = `${state.index + 1} / ${state.results.length}（全 ${state.total} 件）`;
@@ -419,11 +430,7 @@ function onKey(e) {
     case "ArrowLeft": e.preventDefault(); goPrev(); break;
     case " ": e.preventDefault(); togglePlay(); break;
     case "r": case "R": e.preventDefault(); replayCurrent(); break;
-    case "l": case "L":
-      e.preventDefault();
-      $("loop").checked = !$("loop").checked;
-      state.loop = $("loop").checked;
-      break;
+    case "l": case "L": e.preventDefault(); toggleLoop(); break;
     case "c": case "C": e.preventDefault(); toggleClip(); break;
   }
 }
@@ -438,8 +445,8 @@ function init() {
   $("prev-btn").addEventListener("click", goPrev);
   $("replay-btn").addEventListener("click", replayCurrent);
   $("clip-btn").addEventListener("click", () => toggleClip());
+  $("loop-btn").addEventListener("click", () => toggleLoop());
   $("share-btn").addEventListener("click", shareCurrent);
-  $("loop").addEventListener("change", () => { state.loop = $("loop").checked; });
   $("speed").addEventListener("change", () => {
     state.speed = parseFloat($("speed").value) || 1;
     applySpeed();
