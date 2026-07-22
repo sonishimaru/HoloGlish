@@ -10,14 +10,21 @@ from typing import List, Dict, Any, Optional
 
 from yt_dlp import YoutubeDL
 
+from ._net import with_retries
+
 
 def list_channel_videos(
-    channel_id: str, limit: Optional[int] = None, date_after: Optional[str] = None
+    channel_id: str,
+    limit: Optional[int] = None,
+    date_after: Optional[str] = None,
+    retries: int = 3,
+    retry_base: float = 2.0,
 ) -> List[Dict[str, Any]]:
     """チャンネルの動画一覧（新しい順）を返す。
 
     limit: 取得件数上限（None で全件）
     date_after: 'YYYYMMDD' 以降のみ（yt-dlp の daterange）
+    レート制限は指数バックオフでリトライする。
     """
     url = f"https://www.youtube.com/channel/{channel_id}/videos"
     opts: Dict[str, Any] = {
@@ -32,8 +39,12 @@ def list_channel_videos(
         opts["daterange"] = _DateRange(date_after)
 
     videos: List[Dict[str, Any]] = []
-    with YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+
+    def _list():
+        with YoutubeDL(opts) as ydl:
+            return ydl.extract_info(url, download=False)
+
+    info = with_retries(_list, retries=retries, base_delay=retry_base)
     for entry in (info or {}).get("entries", []) or []:
         if not entry or not entry.get("id"):
             continue

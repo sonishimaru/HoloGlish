@@ -71,7 +71,10 @@ def cmd_collect(args: argparse.Namespace) -> int:
         lang_order = _lang_order(ch.get("lang"))
         print(f"[channel] {member} ({branch}) {cid}")
         try:
-            videos = list_channel_videos(cid, limit=args.limit, date_after=args.date_after)
+            videos = list_channel_videos(
+                cid, limit=args.limit, date_after=args.date_after,
+                retries=args.retries, retry_base=args.retry_base,
+            )
         except Exception as e:  # noqa: BLE001
             print(f"  ! 一覧取得失敗: {e}", file=sys.stderr)
             continue
@@ -81,14 +84,17 @@ def cmd_collect(args: argparse.Namespace) -> int:
             if not args.force and db.is_processed(conn, vid):
                 continue
             try:
-                got = fetch_subtitle(vid, args.raw_dir, lang_order=lang_order)
+                got = fetch_subtitle(
+                    vid, args.raw_dir, lang_order=lang_order,
+                    retries=args.retries, retry_base=args.retry_base,
+                )
                 if not got:
                     db.mark_processed(conn, vid, "no_subs", _now())
                     conn.commit()
                     continue
                 sub_path, lang, sub_kind = got
                 segments = parse_subtitle_file(sub_path)
-                meta = fetch_video_meta(vid)
+                meta = fetch_video_meta(vid, retries=args.retries, retry_base=args.retry_base)
                 build_index.upsert_video(
                     conn,
                     {
@@ -190,6 +196,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     c.add_argument("--date-after", help="YYYYMMDD 以降のみ")
     c.add_argument("--raw-dir", default=os.path.join("data", "raw"), help="字幕保存先")
     c.add_argument("--sleep", type=float, default=1.0, help="動画間の待機秒（レート制限）")
+    c.add_argument("--retries", type=int, default=3, help="一過性エラー(429等)のリトライ回数")
+    c.add_argument("--retry-base", type=float, default=2.0, help="リトライの基本待機秒（指数バックオフ）")
     c.add_argument("--force", action="store_true", help="処理済みも再取得")
     c.set_defaults(func=cmd_collect)
 

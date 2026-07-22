@@ -13,6 +13,8 @@ from typing import Dict, Any, Optional, List, Tuple
 
 from yt_dlp import YoutubeDL
 
+from ._net import with_retries
+
 # 探索する言語の優先順（member の主言語を先頭に差し替えて使う）
 DEFAULT_LANG_ORDER = ["ja", "en", "id"]
 
@@ -32,20 +34,32 @@ def fetch_subtitle(
     video_id: str,
     out_dir: str,
     lang_order: Optional[List[str]] = None,
+    retries: int = 3,
+    retry_base: float = 2.0,
 ) -> Optional[Tuple[str, str, str]]:
     """字幕を取得して保存する。
 
     戻り値: (保存ファイルパス, lang, sub_kind) / 取得できなければ None
     sub_kind は 'manual' または 'auto'。
+
+    レート制限（429 等）は一過性エラーとして指数バックオフでリトライする。
+    リトライしても回復しない場合は例外を送出し、呼び出し側で 'error'
+    として記録する（次回実行で再取得される）。字幕が存在しない動画は
+    None を返し 'no_subs' として記録する（この2つを混同しない）。
     """
     lang_order = lang_order or DEFAULT_LANG_ORDER
     os.makedirs(out_dir, exist_ok=True)
     url = f"https://www.youtube.com/watch?v={video_id}"
 
-    # まず利用可能な字幕を調べる（download=False）
-    probe_opts = {"quiet": True, "skip_download": True, "ignoreerrors": True}
-    with YoutubeDL(probe_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    # まず利用可能な字幕を調べる（download=False）。
+    # ignoreerrors=False にして一過性エラーを検知・リトライできるようにする。
+    probe_opts = {"quiet": True, "skip_download": True, "ignoreerrors": False}
+
+    def _probe():
+        with YoutubeDL(probe_opts) as ydl:
+            return ydl.extract_info(url, download=False)
+
+    info = with_retries(_probe, retries=retries, base_delay=retry_base)
     if not info:
         return None
 
@@ -71,8 +85,12 @@ def fetch_subtitle(
         "subtitlesformat": "json3",
         "outtmpl": os.path.join(out_dir, "%(id)s.%(ext)s"),
     }
-    with YoutubeDL(dl_opts) as ydl:
-        ydl.download([url])
+
+    def _download():
+        with YoutubeDL(dl_opts) as ydl:
+            return ydl.download([url])
+
+    with_retries(_download, retries=retries, base_delay=retry_base)
 
     # 保存された字幕ファイルを探す（例: <id>.ja.json3）
     candidates = sorted(glob.glob(os.path.join(out_dir, f"{video_id}.*json3")))
@@ -84,11 +102,15 @@ def fetch_subtitle(
     return candidates[0], lang.split("-")[0], sub_kind
 
 
-def fetch_video_meta(video_id: str) -> Dict[str, Any]:
+def fetch_video_meta(video_id: str, retries: int = 3, retry_base: float = 2.0) -> Dict[str, Any]:
     """タイトル・投稿日など軽量メタを取得。"""
     url = f"https://www.youtube.com/watch?v={video_id}"
-    with YoutubeDL({"quiet": True, "skip_download": True, "ignoreerrors": True}) as ydl:
-        info = ydl.extract_info(url, download=False) or {}
+
+    def _meta():
+        with YoutubeDL({"quiet": True, "skip_download": True, "ignoreerrors": True}) as ydl:
+            return ydl.extract_info(url, download=False) or {}
+
+    info = with_retries(_meta, retries=retries, base_delay=retry_base)
     return {
         "title": info.get("title") or "",
         "published_at": info.get("upload_date") or "",  # YYYYMMDD
