@@ -2,6 +2,7 @@ name: Scheduled Collect
 
 # HoloGlish の字幕を定期的に自動収集し、生成した索引(DB)を専用ブランチ
 # `hologlish-data` に蓄積する。main の作業ツリーは汚さない。
+# （このワークフローを GitHub に確実に登録・有効化するための再登録済み）
 #
 # 注意: GitHub ランナーの IP は YouTube に bot 判定されやすい。安定運用には
 # リポジトリ Secret `YT_COOKIES`（ブラウザから書き出した Netscape 形式 cookies）
