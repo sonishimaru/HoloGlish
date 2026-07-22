@@ -52,11 +52,13 @@ main { max-width: 900px; margin: 0 auto; padding: 0 16px 64px; }
 
 .status { min-height: 22px; color: var(--muted); font-size: .9rem; margin: 6px 2px; }
 
+/* 左: 動画（大きめ）＋操作 / 右: 話者・キャプション。右列は左列の高さに揃える */
 .player-area {
-  display: grid; grid-template-columns: 1.5fr 1fr; gap: 16px;
+  display: grid; grid-template-columns: 1.8fr 1fr; gap: 16px;
   background: var(--panel); border-radius: var(--radius); padding: 14px; margin-bottom: 20px;
-  align-items: start;
+  align-items: stretch;
 }
+.player-col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 /* 動画は縦横比を固定して常に一定サイズ（動画の実寸に依らない） */
 .player-wrap {
   position: relative; aspect-ratio: 16 / 9; width: 100%;
@@ -65,18 +67,16 @@ main { max-width: 900px; margin: 0 auto; padding: 0 16px 64px; }
 .player-wrap #player, .player-wrap iframe {
   position: absolute; inset: 0; width: 100%; height: 100%;
 }
-/* デスクトップ: 動画は上端に貼り付いて見え続け、メタ側だけスクロール */
-@media (min-width: 721px) {
-  .player-wrap { position: sticky; top: 12px; }
-  .player-meta { max-height: 74vh; overflow-y: auto; padding-right: 4px; }
-}
+
+/* 右列は左列（動画＋操作）と同じ高さに揃え、あふれる本文はキャプション内でスクロール */
+.player-meta { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+
 /* モバイル: 縦積み。動画をビューポート上端に固定し、下の情報をスクロール */
 @media (max-width: 720px) {
-  .player-area { grid-template-columns: 1fr; }
+  .player-area { grid-template-columns: 1fr; align-items: start; }
   .player-wrap { position: sticky; top: 0; z-index: 5; }
+  .now-caption { max-height: none; }
 }
-
-.player-meta { display: flex; flex-direction: column; gap: 10px; }
 
 /* チャンネル名を大きく・明確に。ブランチ/言語は小さなタグに分離 */
 .now-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
@@ -87,8 +87,10 @@ main { max-width: 900px; margin: 0 auto; padding: 0 16px 64px; }
   background: var(--panel-2); border-radius: 6px; padding: 1px 7px;
 }
 .now-title { font-size: .9rem; color: var(--muted); }
+/* キャプションが余白を埋め、あふれる場合はここだけスクロール（右列の高さを固定に） */
 .now-caption {
   background: var(--panel-2); border-radius: 8px; padding: 10px 12px; font-size: 1.05rem;
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
 }
 .now-caption mark { background: transparent; color: var(--hi); font-weight: 700; }
 
