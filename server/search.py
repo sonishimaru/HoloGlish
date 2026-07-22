@@ -17,17 +17,25 @@ from __future__ import annotations
 import sqlite3
 from typing import List, Dict, Any, Optional
 
+from pipeline.normalize import terms as _split_terms
+
 
 def _highlight_snippet(text: str, query: str, radius: int = 40) -> str:
-    """マッチ位置を中心に前後を切り出したスニペットを返す（大小文字無視）。"""
-    idx = text.lower().find(query.lower())
-    if idx < 0:
-        return text[: radius * 2]
-    start = max(0, idx - radius)
-    end = min(len(text), idx + len(query) + radius)
-    prefix = "…" if start > 0 else ""
-    suffix = "…" if end < len(text) else ""
-    return f"{prefix}{text[start:end]}{suffix}"
+    """マッチ位置を中心に前後を切り出したスニペットを返す（大小文字無視）。
+
+    正規化の影響で生テキストに query がそのまま無いこともあるため、見つからな
+    ければ空白分割した先頭語で試し、それでも無ければ先頭を返す（表示用の近似）。
+    """
+    lowered = text.lower()
+    for cand in [query.lower()] + [w.lower() for w in query.split()]:
+        idx = lowered.find(cand)
+        if idx >= 0:
+            start = max(0, idx - radius)
+            end = min(len(text), idx + len(cand) + radius)
+            prefix = "…" if start > 0 else ""
+            suffix = "…" if end < len(text) else ""
+            return f"{prefix}{text[start:end]}{suffix}"
+    return text[: radius * 2]
 
 
 def _fts_query(query: str) -> str:
@@ -48,7 +56,8 @@ def search(
 ) -> Dict[str, Any]:
     query = (query or "").strip()
     sort = sort if sort in ("date", "relevance") else "date"
-    if not query:
+    term_list = _split_terms(query)  # 正規化＋空白分割（複数語 AND）
+    if not query or not term_list:
         return {"query": query, "page": page, "page_size": page_size,
                 "total": 0, "sort": sort, "results": []}
 
@@ -64,19 +73,25 @@ def search(
         filters.append("s.lang = ?")
         params.append(lang)
 
-    use_fts = len(query) >= 3
+    # 全語が3文字以上なら FTS(trigram) の AND、そうでなければ LIKE の AND。
+    # 索引/照合はいずれも正規化テキスト norm に対して行う。
+    use_fts = all(len(t) >= 3 for t in term_list)
+    core_param: List[Any] = []
     if use_fts:
+        # フレーズを空白連結すると FTS5 は暗黙 AND になる
         where_core = "segments_fts MATCH ?"
-        core_param: List[Any] = [_fts_query(query)]
+        core_param = [" ".join(_fts_query(t) for t in term_list)]
         from_clause = (
             "FROM segments_fts "
             "JOIN segments s ON s.id = segments_fts.rowid "
             "JOIN videos v ON v.video_id = s.video_id"
         )
     else:
-        where_core = "s.text LIKE ? ESCAPE '\\'"
-        like = "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
-        core_param = [like]
+        likes = []
+        for t in term_list:
+            likes.append("s.norm LIKE ? ESCAPE '\\'")
+            core_param.append("%" + t.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%")
+        where_core = "(" + " AND ".join(likes) + ")"
         from_clause = "FROM segments s JOIN videos v ON v.video_id = s.video_id"
 
     where = " AND ".join([where_core] + filters)
@@ -84,7 +99,7 @@ def search(
     if sort == "relevance":
         # FTS は bm25（値が小さいほど良い一致）。LIKE 経路は bm25 が無いので、
         # 語が相対的に目立つ「短い発話」を優先する近似で代用する。
-        order_by = "bm25(segments_fts) ASC" if use_fts else "length(s.text) ASC, v.published_at DESC"
+        order_by = "bm25(segments_fts) ASC" if use_fts else "length(s.norm) ASC, v.published_at DESC"
     else:
         order_by = "v.published_at DESC, s.start ASC"
 

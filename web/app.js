@@ -166,16 +166,22 @@ function goPrev() {
 // クエリ語の全出現箇所をハイライト（大小文字無視）
 function highlight(text, q) {
   if (!q) return escapeHtml(text);
+  // 空白区切りの各語をハイライト（複数語検索に対応）。正規化の影響で生テキストに
+  // 出現しない語はハイライトされないが、結果自体は正しく表示される。
+  const needles = q.trim().split(/\s+/).map((s) => s.toLowerCase()).filter(Boolean);
   const lower = text.toLowerCase();
-  const needle = q.toLowerCase();
   let out = "";
   let i = 0;
   while (i < text.length) {
-    const hit = lower.indexOf(needle, i);
-    if (hit < 0) { out += escapeHtml(text.slice(i)); break; }
-    out += escapeHtml(text.slice(i, hit));
-    out += "<mark>" + escapeHtml(text.slice(hit, hit + q.length)) + "</mark>";
-    i = hit + q.length;
+    let best = -1, blen = 0;
+    for (const nd of needles) {
+      const hit = lower.indexOf(nd, i);
+      if (hit >= 0 && (best < 0 || hit < best)) { best = hit; blen = nd.length; }
+    }
+    if (best < 0) { out += escapeHtml(text.slice(i)); break; }
+    out += escapeHtml(text.slice(i, best));
+    out += "<mark>" + escapeHtml(text.slice(best, best + blen)) + "</mark>";
+    i = best + blen;
   }
   return out;
 }

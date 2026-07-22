@@ -167,6 +167,58 @@ def test_migrate_adds_member_ja(tmp_path):
     conn.close()
 
 
+def _mini_db(tmp_path, rows):
+    """(member, text) の列から小さな検索用DBを作る。"""
+    from pipeline import db, build_index
+
+    dbp = str(tmp_path / "mini.db")
+    conn = db.connect(dbp)
+    db.init_db(conn)
+    for i, (member, text) in enumerate(rows):
+        vid = f"v{i}"
+        build_index.upsert_video(conn, {
+            "video_id": vid, "member": member, "member_ja": "", "branch": "jp",
+            "lang": "ja", "title": "t", "published_at": "20240101", "url": "u", "sub_kind": "auto",
+        })
+        build_index.replace_segments(conn, vid, "ja", [{"start": 0.0, "dur": 1.0, "text": text}])
+    conn.commit()
+    return conn
+
+
+def test_normalization_space_in_autocaption(tmp_path):
+    """単語途中の空白（ASR由来）を吸収して一致する。"""
+    conn = _mini_db(tmp_path, [("A", "本日はあり がとう ございます")])
+    assert search.search(conn, "ありがとう")["total"] == 1
+    conn.close()
+
+
+def test_normalization_katakana_hiragana(tmp_path):
+    """カタカナ/ひらがなの表記ゆれを吸収する。"""
+    conn = _mini_db(tmp_path, [("A", "ペコラだいすき")])
+    assert search.search(conn, "ぺこら")["total"] == 1   # クエリはひらがな
+    assert search.search(conn, "ペコラ")["total"] == 1   # クエリはカタカナ
+    conn.close()
+
+
+def test_normalization_fullwidth(tmp_path):
+    conn = _mini_db(tmp_path, [("A", "ＨＥＬＬＯ world")])
+    assert search.search(conn, "hello")["total"] == 1
+    conn.close()
+
+
+def test_multi_term_and(tmp_path):
+    """空白区切りは AND（すべての語を含むセグメントだけ）。"""
+    conn = _mini_db(tmp_path, [
+        ("A", "みこ が 歌う 配信"),
+        ("B", "みこ の 雑談"),
+        ("C", "ぺこら の 歌"),
+    ])
+    assert search.search(conn, "みこ 歌")["total"] == 1   # A のみ
+    assert search.search(conn, "歌")["total"] == 2         # A, C
+    assert search.search(conn, "みこ ぺこら")["total"] == 0  # 両方を含む発話は無い
+    conn.close()
+
+
 def test_stats(conn):
     s = search.stats(conn)
     assert s["videos"] >= 1
