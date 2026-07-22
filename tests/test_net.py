@@ -5,9 +5,10 @@ import pytest
 from pipeline import _net
 
 
-def test_common_ydl_opts_empty_without_env(monkeypatch):
+def test_common_ydl_opts_no_cookiefile_without_env(monkeypatch):
     monkeypatch.delenv(_net.COOKIES_ENV, raising=False)
-    assert _net.common_ydl_opts() == {}
+    # cookies 未設定なら cookiefile は付かない（抽出軽量化オプションは常に付く）
+    assert "cookiefile" not in _net.common_ydl_opts()
 
 
 def test_common_ydl_opts_ignores_missing_file(monkeypatch):
@@ -20,6 +21,16 @@ def test_common_ydl_opts_uses_existing_file(monkeypatch, tmp_path):
     cookie.write_text("# Netscape HTTP Cookie File\n")
     monkeypatch.setenv(_net.COOKIES_ENV, str(cookie))
     assert _net.common_ydl_opts()["cookiefile"] == str(cookie)
+
+
+def test_common_ydl_opts_skips_heavy_extraction(monkeypatch):
+    monkeypatch.delenv(_net.COOKIES_ENV, raising=False)
+    opts = _net.common_ydl_opts()
+    # 抽出軽量化: DASH/HLS/翻訳字幕をスキップ
+    assert opts["youtube_include_dash_manifest"] is False
+    assert opts["youtube_include_hls_manifest"] is False
+    skip = opts["extractor_args"]["youtube"]["skip"]
+    assert "translated_subs" in skip and "dash" in skip and "hls" in skip
 
 
 def test_is_transient_detects_rate_limit():
