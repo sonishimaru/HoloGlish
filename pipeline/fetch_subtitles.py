@@ -30,17 +30,32 @@ def _pick_lang(available: Dict[str, Any], order: List[str]) -> Optional[str]:
     return None
 
 
+def _meta_from_info(info: Optional[Dict[str, Any]], video_id: str) -> Dict[str, Any]:
+    """extract_info の結果から軽量メタ（title / 投稿日 / url）を組み立てる。
+
+    純粋関数。プローブで得た info を使い回すことで、メタ取得のための
+    追加の extract_info を省く（収集の高速化）。
+    """
+    info = info or {}
+    return {
+        "title": info.get("title") or "",
+        "published_at": info.get("upload_date") or "",  # YYYYMMDD
+        "url": f"https://www.youtube.com/watch?v={video_id}",
+    }
+
+
 def fetch_subtitle(
     video_id: str,
     out_dir: str,
     lang_order: Optional[List[str]] = None,
     retries: int = 3,
     retry_base: float = 2.0,
-) -> Optional[Tuple[str, str, str]]:
+) -> Optional[Tuple[str, str, str, Dict[str, Any]]]:
     """字幕を取得して保存する。
 
-    戻り値: (保存ファイルパス, lang, sub_kind) / 取得できなければ None
-    sub_kind は 'manual' または 'auto'。
+    戻り値: (保存ファイルパス, lang, sub_kind, meta) / 取得できなければ None
+    sub_kind は 'manual' または 'auto'。meta はプローブ結果から得た
+    title / published_at / url（追加の抽出をしないための使い回し）。
 
     レート制限（429 等）は一過性エラーとして指数バックオフでリトライする。
     リトライしても回復しない場合は例外を送出し、呼び出し側で 'error'
@@ -62,6 +77,9 @@ def fetch_subtitle(
     info = with_retries(_probe, retries=retries, base_delay=retry_base)
     if not info:
         return None
+
+    # プローブの info からメタを確定（別途 fetch_video_meta を呼ばない）
+    meta = _meta_from_info(info, video_id)
 
     manual = info.get("subtitles") or {}
     auto = info.get("automatic_captions") or {}
@@ -100,11 +118,14 @@ def fetch_subtitle(
         candidates = sorted(glob.glob(os.path.join(out_dir, f"{video_id}.*vtt")))
     if not candidates:
         return None
-    return candidates[0], lang.split("-")[0], sub_kind
+    return candidates[0], lang.split("-")[0], sub_kind, meta
 
 
 def fetch_video_meta(video_id: str, retries: int = 3, retry_base: float = 2.0) -> Dict[str, Any]:
-    """タイトル・投稿日など軽量メタを取得。"""
+    """タイトル・投稿日など軽量メタを取得（スタンドアロン用）。
+
+    通常の収集では fetch_subtitle がプローブ結果からメタを返すため呼ばれない。
+    """
     url = f"https://www.youtube.com/watch?v={video_id}"
 
     def _meta():
@@ -113,8 +134,4 @@ def fetch_video_meta(video_id: str, retries: int = 3, retry_base: float = 2.0) -
             return ydl.extract_info(url, download=False) or {}
 
     info = with_retries(_meta, retries=retries, base_delay=retry_base)
-    return {
-        "title": info.get("title") or "",
-        "published_at": info.get("upload_date") or "",  # YYYYMMDD
-        "url": url,
-    }
+    return _meta_from_info(info, video_id)

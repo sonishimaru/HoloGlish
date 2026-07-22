@@ -24,10 +24,17 @@ COOKIES_ENV = "HOLOGLISH_COOKIES"
 def common_ydl_opts() -> Dict[str, Any]:
     """全 yt-dlp 呼び出しに共通で足すオプション。
 
-    ``HOLOGLISH_COOKIES`` にファイルパスが設定され、かつ実在すれば
-    ``cookiefile`` として渡す（bot 判定・年齢制限の緩和）。
+    - ``HOLOGLISH_COOKIES`` にファイルパスが設定され、かつ実在すれば
+      ``cookiefile`` として渡す（bot 判定・年齢制限の緩和）。
+    - 字幕しか使わないので、動画フォーマット(DASH/HLS)の manifest 取得と
+      翻訳字幕の列挙をスキップし、抽出(extract_info)を大幅に軽量化する。
+      （原語の手動/自動字幕は影響を受けない。収集を速くする狙い。）
     """
-    opts: Dict[str, Any] = {}
+    opts: Dict[str, Any] = {
+        "extractor_args": {"youtube": {"skip": ["hls", "dash", "translated_subs"]}},
+        "youtube_include_dash_manifest": False,
+        "youtube_include_hls_manifest": False,
+    }
     cookies = os.environ.get(COOKIES_ENV)
     if cookies and os.path.isfile(cookies):
         opts["cookiefile"] = cookies

@@ -55,7 +55,7 @@ def _filter_channels(
 def cmd_collect(args: argparse.Namespace) -> int:
     # ライブ収集時のみ yt-dlp を import（オフライン ingest では不要）
     from .fetch_videos import list_channel_videos
-    from .fetch_subtitles import fetch_subtitle, fetch_video_meta
+    from .fetch_subtitles import fetch_subtitle
 
     channels = _filter_channels(load_channels(), args.branch, _split(args.members))
     if not channels:
@@ -93,9 +93,9 @@ def cmd_collect(args: argparse.Namespace) -> int:
                     db.mark_processed(conn, vid, "no_subs", _now())
                     conn.commit()
                     continue
-                sub_path, lang, sub_kind = got
+                # メタはプローブ結果から取得済み（追加の抽出をしない）
+                sub_path, lang, sub_kind, meta = got
                 segments = parse_subtitle_file(sub_path)
-                meta = fetch_video_meta(vid, retries=args.retries, retry_base=args.retry_base)
                 build_index.upsert_video(
                     conn,
                     {

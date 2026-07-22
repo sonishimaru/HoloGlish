@@ -30,9 +30,9 @@ on:
         required: false
         default: "30"
       sleep:
-        description: "動画間の待機秒（レート制限対策）"
+        description: "動画間の待機秒（レート制限対策）。cookies併用のため既定1.5"
         required: false
-        default: "3"
+        default: "1.5"
 
 # 索引を hologlish-data ブランチへ push するために書き込み権限が必要
 permissions:
@@ -89,7 +89,7 @@ jobs:
           BRANCH: ${{ inputs.branch }}
           MEMBERS: ${{ inputs.members }}
           LIMIT: ${{ inputs.limit || '30' }}
-          SLEEP: ${{ inputs.sleep || '3' }}
+          SLEEP: ${{ inputs.sleep || '1.5' }}
         run: |
           python -m pipeline.run collect \
             ${BRANCH:+--branch "$BRANCH"} \
