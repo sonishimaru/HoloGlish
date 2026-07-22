@@ -10,7 +10,7 @@ from typing import List, Dict, Any, Optional
 
 from yt_dlp import YoutubeDL
 
-from ._net import with_retries
+from ._net import common_ydl_opts, with_retries
 
 
 def list_channel_videos(
@@ -32,6 +32,7 @@ def list_channel_videos(
         "extract_flat": "in_playlist",
         "skip_download": True,
         "ignoreerrors": True,
+        **common_ydl_opts(),
     }
     if limit:
         opts["playlistend"] = limit

@@ -64,6 +64,28 @@ python -m pipeline.run collect --branch en --date-after 20240101 --limit 30
   回数は `--retries`（既定3）、基本待機秒は `--retry-base`（既定2秒）で調整できます。
   リトライしても回復しない動画は `error`（次回実行で再取得対象）として記録し、
   字幕が存在しない動画（`no_subs`）とは区別されます。
+- **cookies 対応**: 環境変数 `HOLOGLISH_COOKIES` にブラウザから書き出した
+  Netscape 形式の cookies ファイルパスを渡すと、bot 判定・年齢制限を緩和できます。
+
+### 自動収集（スケジュール実行）
+
+GitHub Actions のワークフロー `.github/workflows/collect.yml` で**定期的に自動収集**できます。
+
+- 既定で毎日 1 回動作（`schedule` の cron はリポジトリ側で調整可）。手動実行
+  （`workflow_dispatch`）では対象ブランチ・メンバー・本数・待機秒を指定できます。
+- 生成した索引 `hologlish.db` は専用ブランチ **`hologlish-data`** に蓄積されます
+  （毎回、前回分を復元してから追記するため**再開可能**）。`main` は汚しません。
+- **重要**: GitHub ランナーの IP は YouTube に bot 判定されやすいため、安定運用には
+  リポジトリ Secret **`YT_COOKIES`**（Netscape 形式 cookies の中身）の設定を推奨します。
+  未設定でも動きますが、一部の動画が 429 / サインイン要求で失敗しえます。
+
+収集済み索引を手元やサーバへ取り込むには:
+
+```bash
+git fetch origin hologlish-data
+git show hologlish-data:hologlish.db > data/hologlish.db
+uvicorn server.app:app
+```
 
 ### 2. サーバを起動
 

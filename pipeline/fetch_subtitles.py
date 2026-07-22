@@ -13,7 +13,7 @@ from typing import Dict, Any, Optional, List, Tuple
 
 from yt_dlp import YoutubeDL
 
-from ._net import with_retries
+from ._net import common_ydl_opts, with_retries
 
 # 探索する言語の優先順（member の主言語を先頭に差し替えて使う）
 DEFAULT_LANG_ORDER = ["ja", "en", "id"]
@@ -53,7 +53,7 @@ def fetch_subtitle(
 
     # まず利用可能な字幕を調べる（download=False）。
     # ignoreerrors=False にして一過性エラーを検知・リトライできるようにする。
-    probe_opts = {"quiet": True, "skip_download": True, "ignoreerrors": False}
+    probe_opts = {"quiet": True, "skip_download": True, "ignoreerrors": False, **common_ydl_opts()}
 
     def _probe():
         with YoutubeDL(probe_opts) as ydl:
@@ -84,6 +84,7 @@ def fetch_subtitle(
         "subtitleslangs": [lang],
         "subtitlesformat": "json3",
         "outtmpl": os.path.join(out_dir, "%(id)s.%(ext)s"),
+        **common_ydl_opts(),
     }
 
     def _download():
@@ -107,7 +108,8 @@ def fetch_video_meta(video_id: str, retries: int = 3, retry_base: float = 2.0) -
     url = f"https://www.youtube.com/watch?v={video_id}"
 
     def _meta():
-        with YoutubeDL({"quiet": True, "skip_download": True, "ignoreerrors": True}) as ydl:
+        opts = {"quiet": True, "skip_download": True, "ignoreerrors": True, **common_ydl_opts()}
+        with YoutubeDL(opts) as ydl:
             return ydl.extract_info(url, download=False) or {}
 
     info = with_retries(_meta, retries=retries, base_delay=retry_base)

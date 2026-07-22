@@ -5,6 +5,23 @@ import pytest
 from pipeline import _net
 
 
+def test_common_ydl_opts_empty_without_env(monkeypatch):
+    monkeypatch.delenv(_net.COOKIES_ENV, raising=False)
+    assert _net.common_ydl_opts() == {}
+
+
+def test_common_ydl_opts_ignores_missing_file(monkeypatch):
+    monkeypatch.setenv(_net.COOKIES_ENV, "/no/such/cookies.txt")
+    assert "cookiefile" not in _net.common_ydl_opts()
+
+
+def test_common_ydl_opts_uses_existing_file(monkeypatch, tmp_path):
+    cookie = tmp_path / "cookies.txt"
+    cookie.write_text("# Netscape HTTP Cookie File\n")
+    monkeypatch.setenv(_net.COOKIES_ENV, str(cookie))
+    assert _net.common_ydl_opts()["cookiefile"] == str(cookie)
+
+
 def test_is_transient_detects_rate_limit():
     assert _net.is_transient(Exception("HTTP Error 429: Too Many Requests"))
     assert _net.is_transient(Exception("Sign in to confirm you're not a bot"))

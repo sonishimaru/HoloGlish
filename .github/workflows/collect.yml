@@ -1,0 +1,121 @@
+name: Scheduled Collect
+
+# HoloGlish の字幕を定期的に自動収集し、生成した索引(DB)を専用ブランチ
+# `hologlish-data` に蓄積する。main の作業ツリーは汚さない。
+#
+# 注意: GitHub ランナーの IP は YouTube に bot 判定されやすい。安定運用には
+# リポジトリ Secret `YT_COOKIES`（ブラウザから書き出した Netscape 形式 cookies）
+# を設定すると緩和できる。未設定でも動くが 429 / Sign-in 要求で一部失敗しうる。
+
+on:
+  schedule:
+    # 毎日 18:00 UTC（＝ JST 翌 3:00）。cron はリポジトリ側で調整可。
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "対象ブランチ (jp/en/id)。空なら全ブランチ"
+        required: false
+        default: "jp"
+      members:
+        description: "カンマ区切りのメンバー名で絞り込み（任意）"
+        required: false
+        default: ""
+      limit:
+        description: "チャンネルあたりの取得本数上限"
+        required: false
+        default: "2"
+      sleep:
+        description: "動画間の待機秒（レート制限対策）"
+        required: false
+        default: "4"
+
+# 索引を hologlish-data ブランチへ push するために書き込み権限が必要
+permissions:
+  contents: write
+
+concurrency:
+  group: hologlish-collect
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Restore accumulated index
+        run: |
+          mkdir -p data
+          if git fetch origin hologlish-data:hologlish-data 2>/dev/null; then
+            git show hologlish-data:hologlish.db > data/hologlish.db \
+              && echo "既存の索引を復元しました" \
+              || echo "索引ファイルが見つからないため新規作成します"
+          else
+            echo "hologlish-data ブランチが無いため新規作成します"
+          fi
+
+      - name: Prepare cookies (optional)
+        env:
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
+        run: |
+          if [ -n "$YT_COOKIES" ]; then
+            printf '%s' "$YT_COOKIES" > "$RUNNER_TEMP/cookies.txt"
+            echo "HOLOGLISH_COOKIES=$RUNNER_TEMP/cookies.txt" >> "$GITHUB_ENV"
+            echo "cookies を設定しました"
+          else
+            echo "cookies 未設定（bot 判定リスクあり）のまま続行します"
+          fi
+
+      - name: Collect subtitles
+        env:
+          BRANCH: ${{ inputs.branch || 'jp' }}
+          MEMBERS: ${{ inputs.members }}
+          LIMIT: ${{ inputs.limit || '2' }}
+          SLEEP: ${{ inputs.sleep || '4' }}
+        run: |
+          python -m pipeline.run collect \
+            ${BRANCH:+--branch "$BRANCH"} \
+            ${MEMBERS:+--members "$MEMBERS"} \
+            --limit "$LIMIT" --sleep "$SLEEP" --retries 4 --retry-base 5
+
+      - name: Publish index to hologlish-data branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          pub="$RUNNER_TEMP/pub"
+          rm -rf "$pub" && mkdir -p "$pub"
+          cp data/hologlish.db "$pub/hologlish.db"
+          cat > "$pub/README.md" <<'EOF'
+          # HoloGlish 収集索引（自動更新）
+
+          このブランチは `Scheduled Collect` ワークフローが自動生成する
+          SQLite 索引 `hologlish.db` を保持します。手で編集しないでください。
+
+          利用側:
+          ```bash
+          git fetch origin hologlish-data
+          git show hologlish-data:hologlish.db > data/hologlish.db
+          uvicorn server.app:app
+          ```
+          EOF
+          cd "$pub"
+          git init -q
+          git checkout -q -b hologlish-data
+          git add hologlish.db README.md
+          git commit -q -m "索引を更新 ($(date -u +%Y-%m-%dT%H:%MZ))"
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push -q -f origin hologlish-data
+          echo "hologlish-data ブランチへ索引を公開しました"
