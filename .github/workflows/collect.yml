@@ -26,9 +26,13 @@ on:
         required: false
         default: ""
       limit:
-        description: "1実行あたりのチャンネル別取得本数（既定30。タイムアウトで消えないよう区切る）"
+        description: "1実行でチャンネル別に新規処理する本数の上限（既定30。繰り返しで奥へ前進）"
         required: false
         default: "30"
+      list_depth:
+        description: "列挙する本数（新しい順）。0で全件＝過去アーカイブへ到達（既定0）"
+        required: false
+        default: "0"
       sleep:
         description: "動画間の待機秒（レート制限対策）。cookies併用のため既定1.5"
         required: false
@@ -93,6 +97,9 @@ jobs:
           BRANCH: ${{ inputs.branch }}
           MEMBERS: ${{ inputs.members }}
           LIMIT: ${{ inputs.limit || '30' }}
+          # 列挙は全件(0)。処理量は LIMIT・時間予算で制御し、繰り返し実行で
+          # 過去アーカイブの奥へ前進する（新しい側から順に処理済みをスキップ）。
+          LIST_DEPTH: ${{ inputs.list_depth || '0' }}
           SLEEP: ${{ inputs.sleep || '1.5' }}
           # ジョブ上限(350分=21000秒)より手前で区切り、必ず公開ステップに到達させる。
           # 収集は再開可能なので、繰り返し実行で未取得分を積み上げる。
@@ -101,7 +108,7 @@ jobs:
           python -m pipeline.run collect \
             ${BRANCH:+--branch "$BRANCH"} \
             ${MEMBERS:+--members "$MEMBERS"} \
-            --limit "$LIMIT" --time-budget "$TIME_BUDGET" \
+            --limit "$LIMIT" --list-depth "$LIST_DEPTH" --time-budget "$TIME_BUDGET" \
             --sleep "$SLEEP" --retries 4 --retry-base 5
 
       # 収集ステップが途中で失敗しても、それまでの索引は公開する（データ保全）

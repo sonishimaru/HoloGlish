@@ -136,6 +136,21 @@ def is_processed(conn: sqlite3.Connection, video_id: str) -> bool:
     return row is not None
 
 
+def should_skip(conn: sqlite3.Connection, video_id: str) -> bool:
+    """収集で再取得しない動画か。
+
+    'done'（取得済み）と 'no_subs'（字幕が存在しないと確定済み）はスキップ。
+    'error'（一過性の失敗）は次回再取得したいのでスキップしない。
+    ※ no_subs を再取得対象にすると、字幕の無い新しい動画で毎回上限を使い切り
+      過去アーカイブへ前進できなくなるため、確定状態として扱う。
+    """
+    row = conn.execute(
+        "SELECT 1 FROM processed WHERE video_id = ? AND status IN ('done','no_subs')",
+        (video_id,),
+    ).fetchone()
+    return row is not None
+
+
 def mark_processed(conn: sqlite3.Connection, video_id: str, status: str, ts: str) -> None:
     conn.execute(
         "INSERT INTO processed(video_id, status, updated_at) VALUES(?,?,?) "
