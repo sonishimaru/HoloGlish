@@ -18,6 +18,7 @@ import argparse
 import datetime as _dt
 import json
 import os
+import random
 import sys
 import time
 from typing import List, Dict, Any, Optional
@@ -62,9 +63,20 @@ def cmd_collect(args: argparse.Namespace) -> int:
         print("対象チャンネルがありません（--branch / --members を確認）", file=sys.stderr)
         return 1
 
+    # 1回の実行で全チャンネルを最新側から均等に前進させるため、順序をシャッフルする。
+    # （時間予算で途中打ち切りになっても、実行ごとに違う順序で回れば特定チャンネルに
+    #   偏らず、繰り返し実行で全チャンネルが均等に奥へ進む。）
+    random.shuffle(channels)
+
+    # 列挙の深さ（--list-depth）。0/未指定なら全件を列挙して過去アーカイブへ到達する。
+    # 「1回に処理する新規本数」は --limit で別に制御する（列挙深さ != 処理量）。
+    list_depth = args.list_depth if args.list_depth and args.list_depth > 0 else None
+    per_channel_cap = args.limit if args.limit and args.limit > 0 else None
+
     conn = db.connect(args.db)
     db.init_db(conn)
     total_segments = 0
+    new_total = 0
 
     # 時間予算（秒）。ジョブのハードタイムアウトで強制中断され公開が中途半端に
     # なるのを避けるため、予算に達したら区切りよく収集を打ち切る（再開可能）。
@@ -85,20 +97,25 @@ def cmd_collect(args: argparse.Namespace) -> int:
         print(f"[channel] {member} ({branch}) {cid}")
         try:
             videos = list_channel_videos(
-                cid, limit=args.limit, date_after=args.date_after,
+                cid, limit=list_depth, date_after=args.date_after,
                 retries=args.retries, retry_base=args.retry_base,
             )
         except Exception as e:  # noqa: BLE001
             print(f"  ! 一覧取得失敗: {e}", file=sys.stderr)
             continue
 
+        new_count = 0  # このチャンネルで今回処理した新規本数
         for v in videos:
             if _over_budget():
                 stopped = True
                 break
             vid = v["video_id"]
-            if not args.force and db.is_processed(conn, vid):
-                continue
+            if not args.force and db.should_skip(conn, vid):
+                continue  # 取得済み/字幕なし確定はスキップし、さらに古い方へ進む
+            if per_channel_cap is not None and new_count >= per_channel_cap:
+                break  # このチャンネルの1回分の上限に達した（次回さらに奥へ続行）
+            new_count += 1
+            new_total += 1
             try:
                 got = fetch_subtitle(
                     vid, args.raw_dir, lang_order=lang_order,
@@ -140,9 +157,9 @@ def cmd_collect(args: argparse.Namespace) -> int:
 
     if stopped:
         print(f"時間予算({int(budget)}秒)に達したため区切りました（次回続行）: "
-              f"合計 {total_segments} セグメントを追加/更新")
+              f"新規 {new_total} 本 / 合計 {total_segments} セグメントを追加/更新")
     else:
-        print(f"完了: 合計 {total_segments} セグメントを追加/更新")
+        print(f"完了: 新規 {new_total} 本 / 合計 {total_segments} セグメントを追加/更新")
     conn.close()
     return 0
 
@@ -251,7 +268,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     c = sub.add_parser("collect", help="yt-dlp でライブ収集")
     c.add_argument("--branch", choices=["jp", "en", "id"], help="対象ブランチ")
     c.add_argument("--members", help="カンマ区切りのメンバー名で絞り込み")
-    c.add_argument("--limit", type=int, default=10, help="チャンネルあたりの動画数上限")
+    c.add_argument("--limit", type=int, default=10,
+                   help="1実行でチャンネルあたり新規に処理する本数の上限（0で無制限＝時間予算まで）")
+    c.add_argument("--list-depth", type=int, default=0,
+                   help="列挙する本数（新しい順）。0で全件＝過去アーカイブへ到達。処理量は --limit で制御")
     c.add_argument("--date-after", help="YYYYMMDD 以降のみ")
     c.add_argument("--raw-dir", default=os.path.join("data", "raw"), help="字幕保存先")
     c.add_argument("--sleep", type=float, default=1.0, help="動画間の待機秒（レート制限）")
