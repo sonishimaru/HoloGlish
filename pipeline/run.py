@@ -21,7 +21,7 @@ import os
 import random
 import sys
 import time
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Sequence
 
 import yaml
 
@@ -99,6 +99,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
             videos = list_channel_videos(
                 cid, limit=list_depth, date_after=args.date_after,
                 retries=args.retries, retry_base=args.retry_base,
+                tabs=_tabs(getattr(args, "tabs", None)),
             )
         except Exception as e:  # noqa: BLE001
             print(f"  ! 一覧取得失敗: {e}", file=sys.stderr)
@@ -195,6 +196,7 @@ def cmd_catalog(args: argparse.Namespace) -> int:
         try:
             videos = list_channel_videos(
                 cid, limit=list_depth, retries=args.retries, retry_base=args.retry_base,
+                tabs=_tabs(getattr(args, "tabs", None)),
             )
         except Exception as e:  # noqa: BLE001
             print(f"  ! 一覧取得失敗: {e}", file=sys.stderr)
@@ -319,6 +321,14 @@ def _split(csv: Optional[str]) -> Optional[List[str]]:
     return [x for x in (s.strip() for s in csv.split(",")) if x]
 
 
+def _tabs(csv: Optional[str]) -> Sequence[str]:
+    """--tabs 文字列を列挙タブのリストへ。空なら既定（動画＋ライブ）。"""
+    from .fetch_videos import DEFAULT_TABS
+
+    parsed = _split(csv)
+    return parsed if parsed else DEFAULT_TABS
+
+
 def _lang_order(primary: Optional[str]) -> List[str]:
     order = ["ja", "en", "id"]
     if primary and primary in order:
@@ -346,6 +356,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     c.add_argument("--retry-base", type=float, default=2.0, help="リトライの基本待機秒（指数バックオフ）")
     c.add_argument("--time-budget", type=float, default=0.0,
                    help="収集の時間予算（秒）。0で無制限。超過時は区切りよく打ち切る（再開可能）")
+    c.add_argument("--tabs", default="videos,streams",
+                   help="列挙するチャンネルタブ（カンマ区切り）。既定は動画＋ライブアーカイブ")
     c.add_argument("--force", action="store_true", help="処理済みも再取得")
     c.set_defaults(func=cmd_collect)
 
@@ -356,6 +368,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     cat.add_argument("--sleep", type=float, default=1.0, help="チャンネル間の待機秒")
     cat.add_argument("--retries", type=int, default=3, help="一過性エラーのリトライ回数")
     cat.add_argument("--retry-base", type=float, default=2.0, help="リトライ基本待機秒")
+    cat.add_argument("--tabs", default="videos,streams",
+                     help="列挙するチャンネルタブ（カンマ区切り）。既定は動画＋ライブアーカイブ")
     cat.set_defaults(func=cmd_catalog)
 
     cov = sub.add_parser("coverage", help="収集状況を coverage.json に書き出す")

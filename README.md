@@ -32,7 +32,9 @@
                                                          └→ [静的サイト書き出し(data.json)] → [ブラウザ内検索 (GitHub Pages)]
 ```
 
-- **動画列挙・字幕取得は yt-dlp**（YouTube Data API のキー/クォータ不要）
+- **動画列挙・字幕取得は yt-dlp**（YouTube Data API のキー/クォータ不要）。
+  列挙は各チャンネルの**「動画」タブ＋「ライブ」タブ（配信アーカイブ）**の両方を対象にし、
+  重複排除のうえ両タブを新しい側から均等に処理する（`--tabs` で変更可、既定 `videos,streams`）。
 - **字幕は手動字幕を優先、無ければ自動生成字幕にフォールバック**（`ja` / `en` / `id` を横断）
 - **多言語の部分一致検索**は SQLite FTS5 の `trigram` トークナイザで実現
   （日本語は分かち書きが無いため形態素解析に依存しない）。1〜2文字の語は `LIKE` フォールバック。
@@ -44,7 +46,7 @@
 config/channels.yaml   対象チャンネル定義（member / name_ja / branch / lang。編集可能な種データ）
 pipeline/              収集・パース・インデックス構築・書き出し
   run.py               CLI（collect / catalog / coverage / ingest / export / backfill-names）
-  fetch_videos.py      チャンネルの動画一覧列挙
+  fetch_videos.py      チャンネルの動画一覧列挙（「動画」＋「ライブ」タブをマージ）
   fetch_subtitles.py   字幕DL（手動優先→自動）
   parse_subs.py        json3 / vtt → セグメント
   build_index.py       セグメントを DB へ
