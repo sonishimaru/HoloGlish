@@ -91,6 +91,30 @@ jobs:
             echo "cookies 未設定（bot 判定リスクあり）のまま続行します"
           fi
 
+      # 【早期公開】収集の前に、各チャンネルの全動画を軽量列挙して台帳(母集合)を
+      # 最新化し、収集状況 coverage.json を先に公開する。これにより長い収集の完了を
+      # 待たずに、スプレッドシートへ「未収集」を含む一覧が数分〜十数分で反映される。
+      - name: Refresh catalog (collection coverage)
+        env:
+          BRANCH: ${{ inputs.branch }}
+          MEMBERS: ${{ inputs.members }}
+        run: |
+          python -m pipeline.run catalog \
+            ${BRANCH:+--branch "$BRANCH"} \
+            ${MEMBERS:+--members "$MEMBERS"} \
+            --sleep 1 --retries 3 --retry-base 5 || echo "catalog 更新をスキップ（続行）"
+
+      - name: Build coverage.json (early)
+        if: always()
+        run: |
+          python -m pipeline.run coverage --out data/coverage.json || echo "coverage 生成をスキップ（続行）"
+
+      - name: Publish coverage early
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/publish_data.sh
+
       - name: Collect subtitles
         env:
           # 1実行あたり各チャンネル最大 LIMIT 本（既定30）。再開可能で繰り返し積み上げる。
@@ -111,42 +135,15 @@ jobs:
             --limit "$LIMIT" --list-depth "$LIST_DEPTH" --time-budget "$TIME_BUDGET" \
             --sleep "$SLEEP" --retries 4 --retry-base 5
 
-      # 収集ステップが途中で失敗しても、それまでの索引は公開する（データ保全）
+      # 収集分を反映して coverage.json を作り直す
+      - name: Rebuild coverage.json
+        if: always()
+        run: |
+          python -m pipeline.run coverage --out data/coverage.json || echo "coverage 生成をスキップ（続行）"
+
+      # 収集ステップが途中で失敗しても、それまでの索引・収集状況は公開する（データ保全）
       - name: Publish index to hologlish-data branch
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          # 収集で1本も取得できていない場合は公開しない（既存の索引を消さない保険）
-          if [ ! -f data/hologlish.db ]; then
-            echo "索引ファイルが無いため公開をスキップします"
-            exit 0
-          fi
-          pub="$RUNNER_TEMP/pub"
-          rm -rf "$pub" && mkdir -p "$pub"
-          cp data/hologlish.db "$pub/hologlish.db"
-          cat > "$pub/README.md" <<'EOF'
-          # HoloGlish 収集索引（自動更新）
-
-          このブランチは `Scheduled Collect` ワークフローが自動生成する
-          SQLite 索引 `hologlish.db` を保持します。手で編集しないでください。
-
-          利用側:
-          ```bash
-          git fetch origin hologlish-data
-          git show hologlish-data:hologlish.db > data/hologlish.db
-          uvicorn server.app:app
-          ```
-          EOF
-          cd "$pub"
-          git init -q
-          # 新規に git init したこのリポジトリに author 情報を設定する
-          # （checkout 側で設定しても $pub には効かず commit が empty ident で失敗する）
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -q -b hologlish-data
-          git add hologlish.db README.md
-          git commit -q -m "索引を更新 ($(date -u +%Y-%m-%dT%H:%MZ))"
-          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git push -q -f origin hologlish-data
-          echo "hologlish-data ブランチへ索引を公開しました"
+        run: bash .github/scripts/publish_data.sh

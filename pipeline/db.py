@@ -67,6 +67,20 @@ CREATE TABLE IF NOT EXISTS processed (
     status     TEXT,            -- done / no_subs / error
     updated_at TEXT
 );
+
+-- 収集状況の台帳: チャンネルに存在する「全動画」を軽量列挙して記録する
+-- （字幕の有無に関わらず母集合を持つ）。processed と突き合わせて
+-- 完了/未収集を可視化するために使う。
+CREATE TABLE IF NOT EXISTS catalog (
+    video_id   TEXT PRIMARY KEY,
+    member     TEXT,
+    member_ja  TEXT,
+    branch     TEXT,
+    title      TEXT,
+    url        TEXT,
+    first_seen TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_catalog_member ON catalog(member);
 """
 
 
@@ -156,4 +170,25 @@ def mark_processed(conn: sqlite3.Connection, video_id: str, status: str, ts: str
         "INSERT INTO processed(video_id, status, updated_at) VALUES(?,?,?) "
         "ON CONFLICT(video_id) DO UPDATE SET status=excluded.status, updated_at=excluded.updated_at",
         (video_id, status, ts),
+    )
+
+
+def upsert_catalog(conn: sqlite3.Connection, row: dict, ts: str) -> None:
+    """列挙で見つかった動画を台帳に記録する（title/url は最新で更新、first_seen は保持）。"""
+    conn.execute(
+        "INSERT INTO catalog(video_id, member, member_ja, branch, title, url, first_seen) "
+        "VALUES(:video_id, :member, :member_ja, :branch, :title, :url, :ts) "
+        "ON CONFLICT(video_id) DO UPDATE SET "
+        "member=excluded.member, member_ja=excluded.member_ja, branch=excluded.branch, "
+        "title=COALESCE(NULLIF(excluded.title,''), catalog.title), "
+        "url=COALESCE(NULLIF(excluded.url,''), catalog.url)",
+        {
+            "video_id": row["video_id"],
+            "member": row.get("member", ""),
+            "member_ja": row.get("member_ja", ""),
+            "branch": row.get("branch", ""),
+            "title": row.get("title", ""),
+            "url": row.get("url", ""),
+            "ts": ts,
+        },
     )

@@ -43,17 +43,19 @@
 ```
 config/channels.yaml   対象チャンネル定義（member / name_ja / branch / lang。編集可能な種データ）
 pipeline/              収集・パース・インデックス構築・書き出し
-  run.py               CLI（collect / ingest / export / backfill-names）
+  run.py               CLI（collect / catalog / coverage / ingest / export / backfill-names）
   fetch_videos.py      チャンネルの動画一覧列挙
   fetch_subtitles.py   字幕DL（手動優先→自動）
   parse_subs.py        json3 / vtt → セグメント
   build_index.py       セグメントを DB へ
-  db.py                SQLite スキーマ（FTS5・冪等マイグレーション）
-  export_static.py     索引を静的サイト（data.json + フロント）へ書き出し
+  db.py                SQLite スキーマ（FTS5・冪等マイグレーション・収集台帳 catalog）
+  export_static.py     索引を静的サイト（シャード索引 + フロント + coverage.json）へ書き出し
+  coverage.py          収集状況（ライバー別 完了/未収集）を coverage.json へ
   _net.py              リトライ（指数バックオフ）と cookies オプション
 server/                検索 API（FastAPI）: search.py / app.py
 web/                   フロント。api.js（サーバ/静的の検索抽象）, app.js, index.html, style.css
 data/fixtures/         オフライン検証用サンプル字幕
+tools/                 coverage_sheet.gs（収集状況を表示する Google スプレッドシート用 Apps Script）
 .github/workflows/     ci.yml（テスト）/ collect.yml（自動収集）/ pages.yml（Pages 公開）
 tests/                 pytest スイート
 ```
@@ -115,6 +117,33 @@ GitHub Actions のワークフロー `.github/workflows/collect.yml` で**定期
 git fetch origin hologlish-data
 git show hologlish-data:hologlish.db > data/hologlish.db
 uvicorn server.app:app
+```
+
+### 収集状況スプレッドシート（ライバー別・自動更新）
+
+**どの動画が収集済みか／未収集か**をライバー別に見られる Google スプレッドシートを、
+収集のたびに自動更新できます。
+
+- 収集ワークフローは各チャンネルの**全動画を軽量列挙して台帳(`catalog`)化**し、取得結果
+  （`done`/`no_subs`/`error`）と突き合わせて、ライバー別の収集状況を
+  **`coverage.json`** として `hologlish-data` ブランチと Pages に公開します。
+  - ✅ 完了 / ⏳ 未収集 / — 字幕なし / ⚠ エラー を各動画に付与。
+- Google スプレッドシート側は **Apps Script（[`tools/coverage_sheet.gs`](tools/coverage_sheet.gs)）** を
+  一度貼るだけ。**ライバーごとにタブ**を作り、1時間ごとに `coverage.json` を取得して
+  自動再生成します（サマリータブに全体進捗）。CI に認証情報を置かずに済みます。
+
+セットアップ（初回だけ）:
+
+1. Google スプレッドシートを新規作成 → **拡張機能 → Apps Script**
+2. `tools/coverage_sheet.gs` の内容を貼り付けて保存
+3. 関数 `installHourlyTrigger` を一度実行（権限承認）。以後1時間ごとに自動更新。
+   手動更新はメニュー「HoloGlish → 今すぐ更新」
+
+手元で `coverage.json` を作るには:
+
+```bash
+python -m pipeline.run catalog      # 各チャンネルの全動画を列挙して台帳更新
+python -m pipeline.run coverage --out coverage.json
 ```
 
 ### 2. サーバを起動

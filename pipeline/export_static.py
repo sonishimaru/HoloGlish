@@ -151,6 +151,11 @@ def export_site(conn: sqlite3.Connection, out_dir: str) -> Dict[str, Any]:
     for b, shard in idx["shards"].items():
         _dump(os.path.join(idx_dir, f"shard-{b}.json"), shard)
 
+    # 収集状況（ライバー別の完了/未収集）を Pages にも同梱し、安定URLで配信する。
+    # （Google スプレッドシートの Apps Script はこの JSON を取得して自動更新する）
+    from .coverage import build_coverage
+    _dump(os.path.join(out_dir, "coverage.json"), build_coverage(conn))
+
     with open(os.path.join(WEB_DIR, "index.html"), "r", encoding="utf-8") as f:
         html = f.read()
     html = html.replace("/static/", "static/")

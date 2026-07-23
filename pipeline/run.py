@@ -104,6 +104,14 @@ def cmd_collect(args: argparse.Namespace) -> int:
             print(f"  ! 一覧取得失敗: {e}", file=sys.stderr)
             continue
 
+        # 収集状況の可視化用に、列挙できた全動画を台帳へ記録（未収集の母集合）。
+        for v in videos:
+            db.upsert_catalog(conn, {
+                "video_id": v["video_id"], "member": member, "member_ja": member_ja,
+                "branch": branch, "title": v.get("title", ""), "url": v.get("url", ""),
+            }, _now())
+        conn.commit()
+
         new_count = 0  # このチャンネルで今回処理した新規本数
         for v in videos:
             if _over_budget():
@@ -161,6 +169,65 @@ def cmd_collect(args: argparse.Namespace) -> int:
     else:
         print(f"完了: 新規 {new_total} 本 / 合計 {total_segments} セグメントを追加/更新")
     conn.close()
+    return 0
+
+
+def cmd_catalog(args: argparse.Namespace) -> int:
+    """各チャンネルの全動画を軽量列挙して台帳(catalog)へ記録する（字幕は取得しない）。
+
+    収集状況スプレッドシートの「未収集」母集合を素早く揃えるための一括更新。
+    """
+    from .fetch_videos import list_channel_videos
+
+    channels = _filter_channels(load_channels(), args.branch, _split(args.members))
+    if not channels:
+        print("対象チャンネルがありません（--branch / --members を確認）", file=sys.stderr)
+        return 1
+
+    list_depth = args.list_depth if args.list_depth and args.list_depth > 0 else None
+    conn = db.connect(args.db)
+    db.init_db(conn)
+    total = 0
+    for ch in channels:
+        cid, member, branch = ch["channel_id"], ch["member"], ch["branch"]
+        member_ja = ch.get("name_ja") or ""
+        print(f"[catalog] {member} ({branch}) {cid}")
+        try:
+            videos = list_channel_videos(
+                cid, limit=list_depth, retries=args.retries, retry_base=args.retry_base,
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"  ! 一覧取得失敗: {e}", file=sys.stderr)
+            continue
+        for v in videos:
+            db.upsert_catalog(conn, {
+                "video_id": v["video_id"], "member": member, "member_ja": member_ja,
+                "branch": branch, "title": v.get("title", ""), "url": v.get("url", ""),
+            }, _now())
+        conn.commit()
+        total += len(videos)
+        print(f"  = {len(videos)} 本を台帳へ")
+        time.sleep(args.sleep)
+    conn.close()
+    print(f"完了: 台帳に合計 {total} 本を記録/更新")
+    return 0
+
+
+def cmd_coverage(args: argparse.Namespace) -> int:
+    """収集状況を coverage.json に書き出す（ライバー別の完了/未収集一覧）。"""
+    from .coverage import build_coverage, write_coverage
+
+    conn = db.connect(args.db)
+    db.init_db(conn)
+    data = build_coverage(conn)
+    conn.close()
+    write_coverage(data, args.out)
+    tot = data["summary"]
+    print(
+        f"完了: {args.out} に収集状況を書き出し"
+        f"（対象 {tot['total']} 本 / 完了 {tot['done']} / 未収集 {tot['pending']} / "
+        f"字幕なし {tot['no_subs']} / エラー {tot['error']} / {len(data['members'])} メンバー）"
+    )
     return 0
 
 
@@ -281,6 +348,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="収集の時間予算（秒）。0で無制限。超過時は区切りよく打ち切る（再開可能）")
     c.add_argument("--force", action="store_true", help="処理済みも再取得")
     c.set_defaults(func=cmd_collect)
+
+    cat = sub.add_parser("catalog", help="全動画を軽量列挙し台帳(収集状況の母集合)を更新")
+    cat.add_argument("--branch", choices=["jp", "en", "id"], help="対象ブランチ")
+    cat.add_argument("--members", help="カンマ区切りのメンバー名で絞り込み")
+    cat.add_argument("--list-depth", type=int, default=0, help="列挙本数（0で全件）")
+    cat.add_argument("--sleep", type=float, default=1.0, help="チャンネル間の待機秒")
+    cat.add_argument("--retries", type=int, default=3, help="一過性エラーのリトライ回数")
+    cat.add_argument("--retry-base", type=float, default=2.0, help="リトライ基本待機秒")
+    cat.set_defaults(func=cmd_catalog)
+
+    cov = sub.add_parser("coverage", help="収集状況を coverage.json に書き出す")
+    cov.add_argument("--out", default="coverage.json", help="出力パス")
+    cov.set_defaults(func=cmd_coverage)
 
     g = sub.add_parser("ingest", help="ローカル字幕ファイルを取り込み（オフライン）")
     g.add_argument("--manifest", required=True, help="manifest.json パス")
