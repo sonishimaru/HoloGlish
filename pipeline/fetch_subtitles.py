@@ -13,6 +13,8 @@ from typing import Dict, Any, Optional, List, Tuple
 
 from yt_dlp import YoutubeDL
 
+from ._net import common_ydl_opts, with_retries
+
 # 探索する言語の優先順（member の主言語を先頭に差し替えて使う）
 DEFAULT_LANG_ORDER = ["ja", "en", "id"]
 
@@ -28,26 +30,56 @@ def _pick_lang(available: Dict[str, Any], order: List[str]) -> Optional[str]:
     return None
 
 
+def _meta_from_info(info: Optional[Dict[str, Any]], video_id: str) -> Dict[str, Any]:
+    """extract_info の結果から軽量メタ（title / 投稿日 / url）を組み立てる。
+
+    純粋関数。プローブで得た info を使い回すことで、メタ取得のための
+    追加の extract_info を省く（収集の高速化）。
+    """
+    info = info or {}
+    return {
+        "title": info.get("title") or "",
+        "published_at": info.get("upload_date") or "",  # YYYYMMDD
+        "url": f"https://www.youtube.com/watch?v={video_id}",
+    }
+
+
 def fetch_subtitle(
     video_id: str,
     out_dir: str,
     lang_order: Optional[List[str]] = None,
-) -> Optional[Tuple[str, str, str]]:
+    retries: int = 3,
+    retry_base: float = 2.0,
+) -> Optional[Tuple[str, str, str, Dict[str, Any]]]:
     """字幕を取得して保存する。
 
-    戻り値: (保存ファイルパス, lang, sub_kind) / 取得できなければ None
-    sub_kind は 'manual' または 'auto'。
+    戻り値: (保存ファイルパス, lang, sub_kind, meta) / 取得できなければ None
+    sub_kind は 'manual' または 'auto'。meta はプローブ結果から得た
+    title / published_at / url（追加の抽出をしないための使い回し）。
+
+    レート制限（429 等）は一過性エラーとして指数バックオフでリトライする。
+    リトライしても回復しない場合は例外を送出し、呼び出し側で 'error'
+    として記録する（次回実行で再取得される）。字幕が存在しない動画は
+    None を返し 'no_subs' として記録する（この2つを混同しない）。
     """
     lang_order = lang_order or DEFAULT_LANG_ORDER
     os.makedirs(out_dir, exist_ok=True)
     url = f"https://www.youtube.com/watch?v={video_id}"
 
-    # まず利用可能な字幕を調べる（download=False）
-    probe_opts = {"quiet": True, "skip_download": True, "ignoreerrors": True}
-    with YoutubeDL(probe_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    # まず利用可能な字幕を調べる（download=False）。
+    # ignoreerrors=False にして一過性エラーを検知・リトライできるようにする。
+    probe_opts = {"quiet": True, "skip_download": True, "ignoreerrors": False, **common_ydl_opts()}
+
+    def _probe():
+        with YoutubeDL(probe_opts) as ydl:
+            return ydl.extract_info(url, download=False)
+
+    info = with_retries(_probe, retries=retries, base_delay=retry_base)
     if not info:
         return None
+
+    # プローブの info からメタを確定（別途 fetch_video_meta を呼ばない）
+    meta = _meta_from_info(info, video_id)
 
     manual = info.get("subtitles") or {}
     auto = info.get("automatic_captions") or {}
@@ -70,9 +102,14 @@ def fetch_subtitle(
         "subtitleslangs": [lang],
         "subtitlesformat": "json3",
         "outtmpl": os.path.join(out_dir, "%(id)s.%(ext)s"),
+        **common_ydl_opts(),
     }
-    with YoutubeDL(dl_opts) as ydl:
-        ydl.download([url])
+
+    def _download():
+        with YoutubeDL(dl_opts) as ydl:
+            return ydl.download([url])
+
+    with_retries(_download, retries=retries, base_delay=retry_base)
 
     # 保存された字幕ファイルを探す（例: <id>.ja.json3）
     candidates = sorted(glob.glob(os.path.join(out_dir, f"{video_id}.*json3")))
@@ -81,16 +118,20 @@ def fetch_subtitle(
         candidates = sorted(glob.glob(os.path.join(out_dir, f"{video_id}.*vtt")))
     if not candidates:
         return None
-    return candidates[0], lang.split("-")[0], sub_kind
+    return candidates[0], lang.split("-")[0], sub_kind, meta
 
 
-def fetch_video_meta(video_id: str) -> Dict[str, Any]:
-    """タイトル・投稿日など軽量メタを取得。"""
+def fetch_video_meta(video_id: str, retries: int = 3, retry_base: float = 2.0) -> Dict[str, Any]:
+    """タイトル・投稿日など軽量メタを取得（スタンドアロン用）。
+
+    通常の収集では fetch_subtitle がプローブ結果からメタを返すため呼ばれない。
+    """
     url = f"https://www.youtube.com/watch?v={video_id}"
-    with YoutubeDL({"quiet": True, "skip_download": True, "ignoreerrors": True}) as ydl:
-        info = ydl.extract_info(url, download=False) or {}
-    return {
-        "title": info.get("title") or "",
-        "published_at": info.get("upload_date") or "",  # YYYYMMDD
-        "url": url,
-    }
+
+    def _meta():
+        opts = {"quiet": True, "skip_download": True, "ignoreerrors": True, **common_ydl_opts()}
+        with YoutubeDL(opts) as ydl:
+            return ydl.extract_info(url, download=False) or {}
+
+    info = with_retries(_meta, retries=retries, base_delay=retry_base)
+    return _meta_from_info(info, video_id)

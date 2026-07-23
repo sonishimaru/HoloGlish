@@ -18,6 +18,7 @@ import argparse
 import datetime as _dt
 import json
 import os
+import random
 import sys
 import time
 from typing import List, Dict, Any, Optional
@@ -55,45 +56,92 @@ def _filter_channels(
 def cmd_collect(args: argparse.Namespace) -> int:
     # ライブ収集時のみ yt-dlp を import（オフライン ingest では不要）
     from .fetch_videos import list_channel_videos
-    from .fetch_subtitles import fetch_subtitle, fetch_video_meta
+    from .fetch_subtitles import fetch_subtitle
 
     channels = _filter_channels(load_channels(), args.branch, _split(args.members))
     if not channels:
         print("対象チャンネルがありません（--branch / --members を確認）", file=sys.stderr)
         return 1
 
+    # 1回の実行で全チャンネルを最新側から均等に前進させるため、順序をシャッフルする。
+    # （時間予算で途中打ち切りになっても、実行ごとに違う順序で回れば特定チャンネルに
+    #   偏らず、繰り返し実行で全チャンネルが均等に奥へ進む。）
+    random.shuffle(channels)
+
+    # 列挙の深さ（--list-depth）。0/未指定なら全件を列挙して過去アーカイブへ到達する。
+    # 「1回に処理する新規本数」は --limit で別に制御する（列挙深さ != 処理量）。
+    list_depth = args.list_depth if args.list_depth and args.list_depth > 0 else None
+    per_channel_cap = args.limit if args.limit and args.limit > 0 else None
+
     conn = db.connect(args.db)
     db.init_db(conn)
     total_segments = 0
+    new_total = 0
 
+    # 時間予算（秒）。ジョブのハードタイムアウトで強制中断され公開が中途半端に
+    # なるのを避けるため、予算に達したら区切りよく収集を打ち切る（再開可能）。
+    budget = args.time_budget if args.time_budget and args.time_budget > 0 else None
+    deadline = (time.monotonic() + budget) if budget else None
+
+    def _over_budget() -> bool:
+        return deadline is not None and time.monotonic() >= deadline
+
+    stopped = False
     for ch in channels:
+        if _over_budget():
+            stopped = True
+            break
         cid, member, branch = ch["channel_id"], ch["member"], ch["branch"]
+        member_ja = ch.get("name_ja") or ""
         lang_order = _lang_order(ch.get("lang"))
         print(f"[channel] {member} ({branch}) {cid}")
         try:
-            videos = list_channel_videos(cid, limit=args.limit, date_after=args.date_after)
+            videos = list_channel_videos(
+                cid, limit=list_depth, date_after=args.date_after,
+                retries=args.retries, retry_base=args.retry_base,
+            )
         except Exception as e:  # noqa: BLE001
             print(f"  ! 一覧取得失敗: {e}", file=sys.stderr)
             continue
 
+        # 収集状況の可視化用に、列挙できた全動画を台帳へ記録（未収集の母集合）。
         for v in videos:
+            db.upsert_catalog(conn, {
+                "video_id": v["video_id"], "member": member, "member_ja": member_ja,
+                "branch": branch, "title": v.get("title", ""), "url": v.get("url", ""),
+            }, _now())
+        conn.commit()
+
+        new_count = 0  # このチャンネルで今回処理した新規本数
+        for v in videos:
+            if _over_budget():
+                stopped = True
+                break
             vid = v["video_id"]
-            if not args.force and db.is_processed(conn, vid):
-                continue
+            if not args.force and db.should_skip(conn, vid):
+                continue  # 取得済み/字幕なし確定はスキップし、さらに古い方へ進む
+            if per_channel_cap is not None and new_count >= per_channel_cap:
+                break  # このチャンネルの1回分の上限に達した（次回さらに奥へ続行）
+            new_count += 1
+            new_total += 1
             try:
-                got = fetch_subtitle(vid, args.raw_dir, lang_order=lang_order)
+                got = fetch_subtitle(
+                    vid, args.raw_dir, lang_order=lang_order,
+                    retries=args.retries, retry_base=args.retry_base,
+                )
                 if not got:
                     db.mark_processed(conn, vid, "no_subs", _now())
                     conn.commit()
                     continue
-                sub_path, lang, sub_kind = got
+                # メタはプローブ結果から取得済み（追加の抽出をしない）
+                sub_path, lang, sub_kind, meta = got
                 segments = parse_subtitle_file(sub_path)
-                meta = fetch_video_meta(vid)
                 build_index.upsert_video(
                     conn,
                     {
                         "video_id": vid,
                         "member": member,
+                        "member_ja": member_ja,
                         "branch": branch,
                         "lang": lang,
                         "title": meta.get("title") or v.get("title", ""),
@@ -112,9 +160,74 @@ def cmd_collect(args: argparse.Namespace) -> int:
                 conn.commit()
                 print(f"  ! {vid} 失敗: {e}", file=sys.stderr)
             time.sleep(args.sleep)  # レート制限（YouTube への配慮）
+        if stopped:
+            break
 
-    print(f"完了: 合計 {total_segments} セグメントを追加/更新")
+    if stopped:
+        print(f"時間予算({int(budget)}秒)に達したため区切りました（次回続行）: "
+              f"新規 {new_total} 本 / 合計 {total_segments} セグメントを追加/更新")
+    else:
+        print(f"完了: 新規 {new_total} 本 / 合計 {total_segments} セグメントを追加/更新")
     conn.close()
+    return 0
+
+
+def cmd_catalog(args: argparse.Namespace) -> int:
+    """各チャンネルの全動画を軽量列挙して台帳(catalog)へ記録する（字幕は取得しない）。
+
+    収集状況スプレッドシートの「未収集」母集合を素早く揃えるための一括更新。
+    """
+    from .fetch_videos import list_channel_videos
+
+    channels = _filter_channels(load_channels(), args.branch, _split(args.members))
+    if not channels:
+        print("対象チャンネルがありません（--branch / --members を確認）", file=sys.stderr)
+        return 1
+
+    list_depth = args.list_depth if args.list_depth and args.list_depth > 0 else None
+    conn = db.connect(args.db)
+    db.init_db(conn)
+    total = 0
+    for ch in channels:
+        cid, member, branch = ch["channel_id"], ch["member"], ch["branch"]
+        member_ja = ch.get("name_ja") or ""
+        print(f"[catalog] {member} ({branch}) {cid}")
+        try:
+            videos = list_channel_videos(
+                cid, limit=list_depth, retries=args.retries, retry_base=args.retry_base,
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"  ! 一覧取得失敗: {e}", file=sys.stderr)
+            continue
+        for v in videos:
+            db.upsert_catalog(conn, {
+                "video_id": v["video_id"], "member": member, "member_ja": member_ja,
+                "branch": branch, "title": v.get("title", ""), "url": v.get("url", ""),
+            }, _now())
+        conn.commit()
+        total += len(videos)
+        print(f"  = {len(videos)} 本を台帳へ")
+        time.sleep(args.sleep)
+    conn.close()
+    print(f"完了: 台帳に合計 {total} 本を記録/更新")
+    return 0
+
+
+def cmd_coverage(args: argparse.Namespace) -> int:
+    """収集状況を coverage.json に書き出す（ライバー別の完了/未収集一覧）。"""
+    from .coverage import build_coverage, write_coverage
+
+    conn = db.connect(args.db)
+    db.init_db(conn)
+    data = build_coverage(conn)
+    conn.close()
+    write_coverage(data, args.out)
+    tot = data["summary"]
+    print(
+        f"完了: {args.out} に収集状況を書き出し"
+        f"（対象 {tot['total']} 本 / 完了 {tot['done']} / 未収集 {tot['pending']} / "
+        f"字幕なし {tot['no_subs']} / エラー {tot['error']} / {len(data['members'])} メンバー）"
+    )
     return 0
 
 
@@ -146,6 +259,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
             {
                 "video_id": vid,
                 "member": e.get("member", ""),
+                "member_ja": e.get("member_ja", ""),
                 "branch": e.get("branch", ""),
                 "lang": e.get("lang", "ja"),
                 "title": e.get("title", ""),
@@ -161,6 +275,41 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     conn.commit()
     conn.close()
     print(f"完了: 合計 {total} セグメントを取り込み")
+    return 0
+
+
+def cmd_backfill_names(args: argparse.Namespace) -> int:
+    """既存 DB の member_ja を channels.yaml の name_ja で埋める（再収集不要）。"""
+    mapping = {c["member"]: (c.get("name_ja") or "") for c in load_channels()}
+    conn = db.connect(args.db)
+    db.init_db(conn)
+    updated = 0
+    for member, name_ja in mapping.items():
+        if not name_ja:
+            continue
+        cur = conn.execute(
+            "UPDATE videos SET member_ja = ? WHERE member = ? AND (member_ja IS NULL OR member_ja = '')",
+            (name_ja, member),
+        )
+        updated += cur.rowcount
+    conn.commit()
+    conn.close()
+    print(f"完了: {updated} 本の日本語表示名を補完")
+    return 0
+
+
+def cmd_export(args: argparse.Namespace) -> int:
+    """収集済み索引を静的サイトへ書き出す（サーバ不要のブラウザ検索）。"""
+    from .export_static import export_site
+
+    conn = db.connect(args.db)
+    db.init_db(conn)
+    info = export_site(conn, args.out)
+    conn.close()
+    print(
+        f"完了: {info['out_dir']} に静的サイトを書き出し"
+        f"（{info['videos']} 本 / {info['segments']} 発話 / {info['members']} メンバー）"
+    )
     return 0
 
 
@@ -186,16 +335,43 @@ def main(argv: Optional[List[str]] = None) -> int:
     c = sub.add_parser("collect", help="yt-dlp でライブ収集")
     c.add_argument("--branch", choices=["jp", "en", "id"], help="対象ブランチ")
     c.add_argument("--members", help="カンマ区切りのメンバー名で絞り込み")
-    c.add_argument("--limit", type=int, default=10, help="チャンネルあたりの動画数上限")
+    c.add_argument("--limit", type=int, default=10,
+                   help="1実行でチャンネルあたり新規に処理する本数の上限（0で無制限＝時間予算まで）")
+    c.add_argument("--list-depth", type=int, default=0,
+                   help="列挙する本数（新しい順）。0で全件＝過去アーカイブへ到達。処理量は --limit で制御")
     c.add_argument("--date-after", help="YYYYMMDD 以降のみ")
     c.add_argument("--raw-dir", default=os.path.join("data", "raw"), help="字幕保存先")
     c.add_argument("--sleep", type=float, default=1.0, help="動画間の待機秒（レート制限）")
+    c.add_argument("--retries", type=int, default=3, help="一過性エラー(429等)のリトライ回数")
+    c.add_argument("--retry-base", type=float, default=2.0, help="リトライの基本待機秒（指数バックオフ）")
+    c.add_argument("--time-budget", type=float, default=0.0,
+                   help="収集の時間予算（秒）。0で無制限。超過時は区切りよく打ち切る（再開可能）")
     c.add_argument("--force", action="store_true", help="処理済みも再取得")
     c.set_defaults(func=cmd_collect)
+
+    cat = sub.add_parser("catalog", help="全動画を軽量列挙し台帳(収集状況の母集合)を更新")
+    cat.add_argument("--branch", choices=["jp", "en", "id"], help="対象ブランチ")
+    cat.add_argument("--members", help="カンマ区切りのメンバー名で絞り込み")
+    cat.add_argument("--list-depth", type=int, default=0, help="列挙本数（0で全件）")
+    cat.add_argument("--sleep", type=float, default=1.0, help="チャンネル間の待機秒")
+    cat.add_argument("--retries", type=int, default=3, help="一過性エラーのリトライ回数")
+    cat.add_argument("--retry-base", type=float, default=2.0, help="リトライ基本待機秒")
+    cat.set_defaults(func=cmd_catalog)
+
+    cov = sub.add_parser("coverage", help="収集状況を coverage.json に書き出す")
+    cov.add_argument("--out", default="coverage.json", help="出力パス")
+    cov.set_defaults(func=cmd_coverage)
 
     g = sub.add_parser("ingest", help="ローカル字幕ファイルを取り込み（オフライン）")
     g.add_argument("--manifest", required=True, help="manifest.json パス")
     g.set_defaults(func=cmd_ingest)
+
+    e = sub.add_parser("export", help="静的サイト（クライアント検索）を書き出す")
+    e.add_argument("--out", default="site", help="出力ディレクトリ")
+    e.set_defaults(func=cmd_export)
+
+    b = sub.add_parser("backfill-names", help="既存DBの日本語表示名を channels.yaml から補完")
+    b.set_defaults(func=cmd_backfill_names)
 
     args = p.parse_args(argv)
     return args.func(args)

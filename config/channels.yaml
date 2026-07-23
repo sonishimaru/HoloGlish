@@ -1,37 +1,95 @@
-# HoloGlish 対象チャンネル定義（ホロライブ JP / EN / ID）
+# HoloGlish 対象チャンネル定義（ホロライブ JP / DEV_IS / EN / ID）
 #
 # これは編集可能な「種」データです。デビュー・卒業に合わせて自由に追加・削除してください。
 # channel_id は YouTube チャンネルの UCxxxx 形式ID。
 #   - 取得方法: 対象チャンネルの「概要」→ URL共有、または about ページのソースから UC... を確認。
-#   - ここに載せた ID は代表例です。実運用前に必ず各自で最新をご確認ください。
+#   - ここに載せた ID は公式プロフィール等で確認した実IDです。デビュー/卒業で随時更新してください。
 #
 # フィールド:
 #   channel_id : YouTube チャンネルID (UC...)
-#   member     : 表示名
+#   member     : 内部キー兼英語表記（フィルタ・保存に使う正規名）
+#   name_ja    : UI 表示用の日本語名（任意）。無ければ member をそのまま表示する。
+#                日本語ユーザー向けに、JP メンバーは日本語名を優先表示する。
+#                EN / ID など日本語名が無いメンバーは省略し、英語表記のままでよい。
 #   branch     : jp / en / id
 #   lang       : 主言語の字幕を優先取得 (ja / en / id)。パイプラインは ja,en,id を横断取得します。
 
 channels:
-  # ---- hololive JP ----
-  - { channel_id: UCp6993wxpyDPHUpavwDFqgg, member: Tokino Sora,        branch: jp, lang: ja }
-  - { channel_id: UC5CwaMl1eIgY8h02uZw7u8A, member: Hoshimachi Suisei,  branch: jp, lang: ja }
-  - { channel_id: UC-hM6YJuNYVAmUWxeIr9FeA, member: Sakura Miko,        branch: jp, lang: ja }
-  - { channel_id: UCdn5BQ06XqgXoAxIhbqw5Rg, member: Shirakami Fubuki,   branch: jp, lang: ja }
-  - { channel_id: UC1opHUrw8rvnsadT-iGp7Cg, member: Minato Aqua,        branch: jp, lang: ja }
-  - { channel_id: UCvzGlP9oQwU--Y0r9id_jnA, member: Oozora Subaru,      branch: jp, lang: ja }
-  - { channel_id: UChAnqc_AY5_I3Px5dig3X1Q, member: Inugami Korone,     branch: jp, lang: ja }
-  - { channel_id: UCvaTdHTWBGv3MKj3KVqJVCw, member: Nekomata Okayu,     branch: jp, lang: ja }
-  - { channel_id: UC1DCedRgGHBdm81E1llLhOQ, member: Usada Pekora,       branch: jp, lang: ja }
-  - { channel_id: UCUKD-uaobj9jiqB-VXt71mA, member: Shishiro Botan,     branch: jp, lang: ja }
+  # ---- hololive JP（0期〜holoX / ゲーマーズ）----
+  - { channel_id: UCp6993wxpyDPHUpavwDFqgg, member: Tokino Sora,        name_ja: ときのそら,           branch: jp, lang: ja }
+  - { channel_id: UCDqI2jOz0weumE8s7paEk6g, member: Roboco San,         name_ja: ロボ子さん,           branch: jp, lang: ja }
+  - { channel_id: UC5CwaMl1eIgY8h02uZw7u8A, member: Hoshimachi Suisei,  name_ja: 星街すいせい,         branch: jp, lang: ja }
+  - { channel_id: UC0TXe_LYZ4scaW2XMyi5_kw, member: AZKi,               name_ja: AZKi,                 branch: jp, lang: ja }
+  - { channel_id: UC-hM6YJuNYVAmUWxeIr9FeA, member: Sakura Miko,        name_ja: さくらみこ,           branch: jp, lang: ja }
+  - { channel_id: UCFTLzh12_nrtzqBPsTCqenA, member: Aki Rosenthal,      name_ja: アキ・ローゼンタール,  branch: jp, lang: ja }
+  - { channel_id: UCQ0UDLQCjY0rmuxCDE38FGg, member: Natsuiro Matsuri,   name_ja: 夏色まつり,           branch: jp, lang: ja }
+  - { channel_id: UC1CfXB_kRs3C-zaeTG3oGyg, member: Akai Haato,         name_ja: 赤井はあと,           branch: jp, lang: ja }
+  - { channel_id: UCdn5BQ06XqgXoAxIhbqw5Rg, member: Shirakami Fubuki,   name_ja: 白上フブキ,           branch: jp, lang: ja }
+  - { channel_id: UCXTpFs_3PqI41qX2d9tL2Rw, member: Murasaki Shion,     name_ja: 紫咲シオン,           branch: jp, lang: ja }
+  - { channel_id: UC7fk0CB07ly8oSl0aqKkqFg, member: Nakiri Ayame,       name_ja: 百鬼あやめ,           branch: jp, lang: ja }
+  - { channel_id: UC1suqwovbL1kzsoaZgFZLKg, member: Yuzuki Choco,       name_ja: 癒月ちょこ,           branch: jp, lang: ja }
+  - { channel_id: UC1opHUrw8rvnsadT-iGp7Cg, member: Minato Aqua,        name_ja: 湊あくあ,             branch: jp, lang: ja }
+  - { channel_id: UCvzGlP9oQwU--Y0r9id_jnA, member: Oozora Subaru,      name_ja: 大空スバル,           branch: jp, lang: ja }
+  - { channel_id: UCp-5t9SrOQwXMU7iIjQfARg, member: Ookami Mio,         name_ja: 大神ミオ,             branch: jp, lang: ja }
+  - { channel_id: UChAnqc_AY5_I3Px5dig3X1Q, member: Inugami Korone,     name_ja: 戌神ころね,           branch: jp, lang: ja }
+  - { channel_id: UCvaTdHTWBGv3MKj3KVqJVCw, member: Nekomata Okayu,     name_ja: 猫又おかゆ,           branch: jp, lang: ja }
+  - { channel_id: UCdyqAaZDKHXg4Ahi7VENThQ, member: Shirogane Noel,     name_ja: 白銀ノエル,           branch: jp, lang: ja }
+  - { channel_id: UCvInZx9h3jC2JzsIzoOebWg, member: Shiranui Flare,     name_ja: 不知火フレア,         branch: jp, lang: ja }
+  - { channel_id: UC1DCedRgGHBdm81E1llLhOQ, member: Usada Pekora,       name_ja: 兎田ぺこら,           branch: jp, lang: ja }
+  - { channel_id: UCCzUftO8KOVkV4wQG1vkUvg, member: Houshou Marine,     name_ja: 宝鐘マリン,           branch: jp, lang: ja }
+  - { channel_id: UCZlDXzGoo7d44bwdNObFacg, member: Amane Kanata,       name_ja: 天音かなた,           branch: jp, lang: ja }
+  - { channel_id: UCqm3BQLlJfvkTsX_hvm0UmA, member: Tsunomaki Watame,   name_ja: 角巻わため,           branch: jp, lang: ja }
+  - { channel_id: UC1uv2Oq6kNxgATlCiez59hw, member: Tokoyami Towa,      name_ja: 常闇トワ,             branch: jp, lang: ja }
+  - { channel_id: UCa9Y57gfeY0Zro_noHRVrnw, member: Himemori Luna,      name_ja: 姫森ルーナ,           branch: jp, lang: ja }
+  - { channel_id: UCFKOVgVbGmX65RxO3EtH3iw, member: Yukihana Lamy,      name_ja: 雪花ラミィ,           branch: jp, lang: ja }
+  - { channel_id: UCAWSyEs_Io8MtpY3m-zqILA, member: Momosuzu Nene,      name_ja: 桃鈴ねね,             branch: jp, lang: ja }
+  - { channel_id: UCUKD-uaobj9jiqB-VXt71mA, member: Shishiro Botan,     name_ja: 獅白ぼたん,           branch: jp, lang: ja }
+  - { channel_id: UCK9V2B22uJYu3N7eR_BT9QA, member: Omaru Polka,        name_ja: 尾丸ポルカ,           branch: jp, lang: ja }
+  - { channel_id: UCENwRMx5Yh42zWpzURebzTw, member: La+ Darknesss,      name_ja: ラプラス・ダークネス, branch: jp, lang: ja }
+  - { channel_id: UCs9_O1tRPMQTHQ-N_L6FU2g, member: Takane Lui,         name_ja: 鷹嶺ルイ,             branch: jp, lang: ja }
+  - { channel_id: UC6eWCld0KwmyHFbAqK3V-Rw, member: Hakui Koyori,       name_ja: 博衣こより,           branch: jp, lang: ja }
+  - { channel_id: UCIBY1ollUsauvVi4hW4cumw, member: Sakamata Chloe,     name_ja: 沙花叉クロヱ,         branch: jp, lang: ja }
+  - { channel_id: UC_vMYWcDjmfdpH6r4TTn1MQ, member: Kazama Iroha,       name_ja: 風真いろは,           branch: jp, lang: ja }
 
-  # ---- hololive English ----
-  - { channel_id: UCoSrY_IQQVpmIRZ9Xf-y93g, member: Gawr Gura,         branch: en, lang: en }
-  - { channel_id: UCL_qhgtOy0dy1Agp8vkySQg, member: Mori Calliope,     branch: en, lang: en }
-  - { channel_id: UCHsx4Hqa-1ORjQTh9TYDhww, member: Takanashi Kiara,   branch: en, lang: en }
-  - { channel_id: UCMwGHR0BTZuLsmjY_NT5Pwg, member: Ninomae Ina'nis,   branch: en, lang: en }
-  - { channel_id: UCyl1z3jo3XHR1riLFKG5UAg, member: Watson Amelia,     branch: en, lang: en }
+  # ---- hololive DEV_IS（ReGLOSS / FLOW GLOW）----
+  - { channel_id: UCMGfV7TVTmHhEErVJg1oHBQ, member: Hiodoshi Ao,        name_ja: 火威青,               branch: jp, lang: ja }
+  - { channel_id: UCWQtYtq9EOB4-I5P-3fh8lA, member: Otonose Kanade,     name_ja: 音乃瀬奏,             branch: jp, lang: ja }
+  - { channel_id: UCtyWhCj3AqKh2dXctLkDtng, member: Ichijou Ririka,     name_ja: 一条莉々華,           branch: jp, lang: ja }
+  - { channel_id: UCdXAk5MpyLD8594lm_OvtGQ, member: Juufuutei Raden,    name_ja: 儒烏風亭らでん,       branch: jp, lang: ja }
+  - { channel_id: UC1iA6_NT4mtAcIII6ygrvCw, member: Todoroki Hajime,    name_ja: 轟はじめ,             branch: jp, lang: ja }
+  - { channel_id: UC9LSiN9hXI55svYEBrrK-tw, member: Isaki Riona,        name_ja: 響咲リオナ,           branch: jp, lang: ja }
+  - { channel_id: UCKMWFR6lAstLa7Vbf5dH7ig, member: Rindo Chihaya,      name_ja: 輪堂千速,             branch: jp, lang: ja }
+  - { channel_id: UCGzTVXqMQHa4AgJVJIVvtDQ, member: Kikirara Vivi,      name_ja: 綺々羅々ヴィヴィ,     branch: jp, lang: ja }
+  - { channel_id: UCuI_opAVX6qbxZY-a-AxFuQ, member: Koganei Niko,       name_ja: 虎金妃笑虎,           branch: jp, lang: ja }
+  - { channel_id: UCjk2nKmHzgH5Xy-C5qYRd5A, member: Mizumiya Su,        name_ja: 水宮枢,               branch: jp, lang: ja }
 
-  # ---- hololive Indonesia ----
+  # ---- hololive English（Myth / Promise / Advent / Justice）----（日本語名は省略＝英語表記のまま）
+  - { channel_id: UCoSrY_IQQVpmIRZ9Xf-y93g, member: Gawr Gura,                  branch: en, lang: en }
+  - { channel_id: UCL_qhgtOy0dy1Agp8vkySQg, member: Mori Calliope,              branch: en, lang: en }
+  - { channel_id: UCHsx4Hqa-1ORjQTh9TYDhww, member: Takanashi Kiara,            branch: en, lang: en }
+  - { channel_id: UCMwGHR0BTZuLsmjY_NT5Pwg, member: Ninomae Ina'nis,            branch: en, lang: en }
+  - { channel_id: UCyl1z3jo3XHR1riLFKG5UAg, member: Watson Amelia,              branch: en, lang: en }
+  - { channel_id: UC8rcEBzJSleTkf_-agPM20g, member: IRyS,                       branch: en, lang: en }
+  - { channel_id: UCmbs8T6MWqUHP1tIQvSgKrg, member: Ouro Kronii,                branch: en, lang: en }
+  - { channel_id: UC3n5uGu18FoCy23ggWWp8tA, member: Nanashi Mumei,              branch: en, lang: en }
+  - { channel_id: UCgmPnx-EEeOrZSg5Tiw7ZRQ, member: Hakos Baelz,                branch: en, lang: en }
+  - { channel_id: UCgnfPPb9JI3e9A4cXHnWbyg, member: Shiori Novella,             branch: en, lang: en }
+  - { channel_id: UC9p_lqQ0FEDz327Vgf5JwqA, member: Koseki Bijou,               branch: en, lang: en }
+  - { channel_id: UC_sFNM0z0MWm9A6WlKPuMMg, member: Nerissa Ravencroft,         branch: en, lang: en }
+  # フワワ＆モココは公式に共有チャンネル（FUWAMOCO）のため1エントリで扱う
+  - { channel_id: UCt9H_RpQzhxzlyBxFqrdHqA, member: FUWAMOCO,                   branch: en, lang: en }
+  - { channel_id: UCW5uhrG1eCBYditmhL0Ykjw, member: Elizabeth Rose Bloodflame,  branch: en, lang: en }
+  - { channel_id: UCDHABijvPBnJm7F-KlNME3w, member: Gigi Murin,                 branch: en, lang: en }
+  - { channel_id: UCvN5h1ShZtc7nly3pezRayg, member: Cecilia Immergreen,         branch: en, lang: en }
+  - { channel_id: UCl69AEx4MdqMZH7Jtsm7Tig, member: Raora Panthera,             branch: en, lang: en }
+
+  # ---- hololive Indonesia（gen1〜3）----（日本語名は省略＝英語表記のまま）
   - { channel_id: UCOyYb1c43VlX9rc_lT6NKQw, member: Ayunda Risu,       branch: id, lang: id }
   - { channel_id: UCP0BspO_AMEe3aQqqpo89Dg, member: Moona Hoshinova,   branch: id, lang: id }
   - { channel_id: UCAoy6rzhSf4ydcYjJw3WoVg, member: Airani Iofifteen,  branch: id, lang: id }
+  - { channel_id: UCYz_5n-uDuChHtLo7My1HnQ, member: Kureiji Ollie,     branch: id, lang: id }
+  - { channel_id: UC727SQYUvx5pDDGQpTICNWg, member: Anya Melfissa,     branch: id, lang: id }
+  - { channel_id: UChgTyjG-pdNvxxhdsXfHQ5Q, member: Pavolia Reine,     branch: id, lang: id }
+  - { channel_id: UCTvHWSfBZgtxE4sILOaurIQ, member: Vestia Zeta,       branch: id, lang: id }
+  - { channel_id: UCZLZ8Jjx_RN2CXloOmgTHVg, member: Kaela Kovalskia,   branch: id, lang: id }
+  - { channel_id: UCjLEmnpCNeisMxy134KPwWw, member: Kobo Kanaeru,      branch: id, lang: id }

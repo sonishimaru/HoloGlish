@@ -22,26 +22,78 @@
       <select id="f-branch"><option value="">全ブランチ</option></select>
       <select id="f-member"><option value="">全メンバー</option></select>
       <select id="f-lang"><option value="">全言語</option></select>
+      <select id="f-sort" title="並び順">
+        <option value="date">新着順</option>
+        <option value="relevance">一致度順</option>
+      </select>
     </div>
 
     <div id="status" class="status"></div>
 
-    <section id="player-area" class="player-area hidden">
-      <div class="player-wrap">
-        <div id="player"></div>
+    <section id="landing" class="landing hidden">
+      <p id="coverage" class="coverage"></p>
+      <div id="recent-wrap" class="suggest-wrap hidden">
+        <span class="suggest-label">最近の検索
+          <button id="recent-clear" type="button" class="linklike">クリア</button>
+        </span>
+        <div id="recent" class="suggestions"></div>
       </div>
+      <div class="suggest-wrap">
+        <span class="suggest-label">試しに検索:</span>
+        <div id="suggestions" class="suggestions"></div>
+      </div>
+    </section>
+
+    <section id="player-area" class="player-area hidden">
+      <!-- 左: 動画（大きめ）＋操作ボタンを直下に配置 -->
+      <div class="player-col">
+        <div class="player-wrap">
+          <div id="player"></div>
+        </div>
+
+        <div class="nav">
+          <button id="prev-btn" type="button" title="前の用例 (←)">←&nbsp;前の用例</button>
+          <span id="counter" class="counter"></span>
+          <button id="next-btn" type="button" title="次の用例 (→)">次の用例&nbsp;→</button>
+        </div>
+
+        <div class="controls">
+          <div class="controls-actions">
+            <button id="replay-btn" type="button" title="この用例をもう一度 (R)">↻&nbsp;リプレイ</button>
+            <button id="clip-btn" type="button" title="該当箇所の前後5秒をループ (C)" aria-pressed="false">✂&nbsp;±5秒</button>
+            <button id="loop-btn" type="button" title="この用例をループ (L)" aria-pressed="false">🔁&nbsp;ループ</button>
+            <button id="share-btn" type="button" title="この用例（クリップ）へのリンクをコピー">🔗&nbsp;共有</button>
+          </div>
+          <div class="controls-settings">
+            <label class="ctrl speed">速度
+              <select id="speed" title="再生速度">
+                <option value="0.5">0.5×</option>
+                <option value="0.75">0.75×</option>
+                <option value="1" selected>1×</option>
+                <option value="1.25">1.25×</option>
+                <option value="1.5">1.5×</option>
+              </select>
+            </label>
+            <label class="ctrl"><input id="autoplay" type="checkbox" checked /> 連続再生</label>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右: 話者・タイトル・キャプション・前後トランスクリプト（左の高さに揃えてスクロール） -->
       <div class="player-meta">
-        <div id="now-member" class="now-member"></div>
+        <div class="now-head">
+          <span id="now-member" class="now-member"></span>
+          <span id="now-tags" class="now-tags"></span>
+        </div>
         <div id="now-title" class="now-title"></div>
         <div id="now-caption" class="now-caption"></div>
-        <div class="nav">
-          <button id="prev-btn" type="button">← 前の用例</button>
-          <span id="counter" class="counter"></span>
-          <button id="next-btn" type="button">次の用例 →</button>
-        </div>
-        <label class="autoplay">
-          <input id="autoplay" type="checkbox" checked /> 用例を連続再生
-        </label>
+
+        <details id="ctx-wrap" class="ctx-wrap">
+          <summary>前後のトランスクリプトを表示</summary>
+          <ol id="context" class="context"></ol>
+        </details>
+
+        <p class="hint"><kbd>←</kbd>/<kbd>→</kbd> 用例 ・ <kbd>Space</kbd> 再生/停止 ・ <kbd>R</kbd> リプレイ ・ <kbd>L</kbd> ループ ・ <kbd>C</kbd> ±5秒</p>
       </div>
     </section>
 
@@ -53,7 +105,11 @@
     <p>字幕は索引用に取得し、再生は YouTube 公式プレイヤー経由です。非公式のファンツールであり、カバー(hololive production)とは無関係です。</p>
   </footer>
 
-  <script src="https://www.youtube.com/iframe_api"></script>
+  <script src="/static/config.js"></script>
+  <!-- プレイヤー用の外部スクリプトは async で読み込み、検索UIの初期化をブロックしない。
+       準備完了時に window.onYouTubeIframeAPIReady（app.js で定義）が呼ばれる。 -->
+  <script src="https://www.youtube.com/iframe_api" async></script>
+  <script src="/static/api.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

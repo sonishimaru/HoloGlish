@@ -6,34 +6,58 @@
 
 字幕を事前収集して SQLite の全文検索インデックスを作り、Web UI から検索・再生します。
 
+**🌐 公開サイト: https://sonishimaru.github.io/HoloGlish/** （サーバ不要・ブラウザだけで検索）
+
 > 非公式のファンツールです。カバー株式会社 / hololive production とは無関係です。
 > 字幕は索引付け目的で取得し、動画の再生は YouTube 公式の埋め込みプレイヤー経由で行います。
+
+## 主な機能
+
+- **多言語の部分一致検索**（日本語・英語・インドネシア語）。並び順は新着順／一致度順。
+- **表記ゆれに強い**: 索引・クエリを正規化（NFKC・小文字化・**単語途中の空白除去**・
+  **カタカナ↔ひらがな**）して照合。自動字幕の「あり がとう」や「ペコラ↔ぺこら」も一致。
+- **複数語 AND**（空白区切り）: 「みこ 歌」で両方を含む用例に絞り込み。
+- **メンバー名は日本語表記を優先**（例: 兎田ぺこら）。EN/ID など日本語名が無い場合は英語表記。
+- **学習向けの再生**: 該当秒へジャンプ／前後の用例を巡回／連続再生／再生速度(0.5〜1.5×)／
+  ループ／**±5秒クリップ**（前後5秒を強調ループ）。既定は**該当語の2秒前から再生**。
+- **前後トランスクリプト**表示とクリックでのジャンプ。
+- **共有リンク**: 検索条件だけでなく、再生中の用例（クリップ状態含む）へも直接リンクできる。
+- **2つの使い方**: 常駐サーバ不要の**静的サイト**（GitHub Pages）と、動的な **FastAPI サーバ**。
+- **自動収集**: GitHub Actions が定期的に全アーカイブを収集し、索引をキャッシュとして蓄積・公開。
 
 ## 仕組み
 
 ```
-[yt-dlp 収集] → [字幕パース] → [SQLite FTS5 インデックス] → [FastAPI 検索] → [静的フロント + YouTube IFrame]
+[yt-dlp 収集] → [字幕パース] → [SQLite FTS5 インデックス] →┬→ [FastAPI 検索 API]        → [フロント + YouTube IFrame]
+                                                         └→ [静的サイト書き出し(data.json)] → [ブラウザ内検索 (GitHub Pages)]
 ```
 
 - **動画列挙・字幕取得は yt-dlp**（YouTube Data API のキー/クォータ不要）
 - **字幕は手動字幕を優先、無ければ自動生成字幕にフォールバック**（`ja` / `en` / `id` を横断）
 - **多言語の部分一致検索**は SQLite FTS5 の `trigram` トークナイザで実現
   （日本語は分かち書きが無いため形態素解析に依存しない）。1〜2文字の語は `LIKE` フォールバック。
+- **静的サイト版**は同じ検索ロジックを `web/api.js` がブラウザ内で再現し、`data.json` を検索する。
 
 ## ディレクトリ
 
 ```
-config/channels.yaml   対象チャンネル定義（編集可能な種データ）
-pipeline/              収集・パース・インデックス構築
-  run.py               CLI（collect / ingest）
+config/channels.yaml   対象チャンネル定義（member / name_ja / branch / lang。編集可能な種データ）
+pipeline/              収集・パース・インデックス構築・書き出し
+  run.py               CLI（collect / catalog / coverage / ingest / export / backfill-names）
   fetch_videos.py      チャンネルの動画一覧列挙
   fetch_subtitles.py   字幕DL（手動優先→自動）
   parse_subs.py        json3 / vtt → セグメント
   build_index.py       セグメントを DB へ
-  db.py                SQLite スキーマ（FTS5）
-server/                検索 API（FastAPI）
-web/                   フロント（検索UI + YouTube IFrame プレイヤー）
+  db.py                SQLite スキーマ（FTS5・冪等マイグレーション・収集台帳 catalog）
+  export_static.py     索引を静的サイト（シャード索引 + フロント + coverage.json）へ書き出し
+  coverage.py          収集状況（ライバー別 完了/未収集）を coverage.json へ
+  _net.py              リトライ（指数バックオフ）と cookies オプション
+server/                検索 API（FastAPI）: search.py / app.py
+web/                   フロント。api.js（サーバ/静的の検索抽象）, app.js, index.html, style.css
 data/fixtures/         オフライン検証用サンプル字幕
+tools/                 coverage_sheet.gs（収集状況を表示する Google スプレッドシート用 Apps Script）
+.github/workflows/     ci.yml（テスト）/ collect.yml（自動収集）/ pages.yml（Pages 公開）
+tests/                 pytest スイート
 ```
 
 ## セットアップ
@@ -60,6 +84,67 @@ python -m pipeline.run collect --branch en --date-after 20240101 --limit 30
 
 - 一度処理した動画は記録され、次回以降スキップされます（**再開可能**）。再取得は `--force`。
 - `--sleep`（既定1秒）で動画間の待機を調整し、YouTube への負荷を抑えます。
+- **レート制限（HTTP 429 / bot 確認要求）は一過性エラーとして指数バックオフで自動リトライ**します。
+  回数は `--retries`（既定3）、基本待機秒は `--retry-base`（既定2秒）で調整できます。
+  リトライしても回復しない動画は `error`（次回実行で再取得対象）として記録し、
+  字幕が存在しない動画（`no_subs`）とは区別されます。
+- **cookies 対応**: 環境変数 `HOLOGLISH_COOKIES` にブラウザから書き出した
+  Netscape 形式の cookies ファイルパスを渡すと、bot 判定・年齢制限を緩和できます。
+
+### 自動収集（スケジュール実行）
+
+GitHub Actions のワークフロー `.github/workflows/collect.yml` で**定期的に自動収集**します。
+
+- 既定は**全ブランチ・6時間ごと**。**列挙は全件**（`--list-depth 0`）で過去アーカイブまで見渡し、
+  **1実行では各チャンネル最大30本の新規**（`--limit 30`）を新しい側から処理します。処理済みは
+  スキップして次の実行でさらに古い方へ前進するため、**繰り返し実行で全アーカイブに到達**します。
+  実行ごとにチャンネル順をシャッフルし、特定チャンネルに偏らず均等に進めます。
+- **時間予算で区切り、必ず公開に到達**: 収集は既定で**5時間（`--time-budget 18000`）**に達すると
+  区切りよく打ち切り、ジョブ上限（350分）で強制中断される前に公開ステップへ到達します。
+  収集は再開可能なので、次回実行で続きから積み上がります（消えません）。
+- 字幕が無いと確定した動画（`no_subs`）は再取得しません（`error` は次回再取得）。字幕の無い
+  新しい動画で毎回上限を使い切らず、確実に過去へ前進させるためです。
+- 手動実行（`workflow_dispatch`）では対象ブランチ・メンバー・本数・列挙深さ・待機秒・時間予算を指定できます。
+- 生成した索引 `hologlish.db` は専用ブランチ **`hologlish-data`** に蓄積されます
+  （毎回、前回分を復元してから追記するため**再開可能**）。`main` は汚しません。
+- **重要**: GitHub ランナーの IP は YouTube に bot 判定されやすいため、安定運用には
+  リポジトリ Secret **`YT_COOKIES`**（Netscape 形式 cookies の中身）の設定を推奨します。
+  未設定でも動きますが、一部の動画が 429 / サインイン要求で失敗しえます。
+
+収集済み索引を手元やサーバへ取り込むには:
+
+```bash
+git fetch origin hologlish-data
+git show hologlish-data:hologlish.db > data/hologlish.db
+uvicorn server.app:app
+```
+
+### 収集状況スプレッドシート（ライバー別・自動更新）
+
+**どの動画が収集済みか／未収集か**をライバー別に見られる Google スプレッドシートを、
+収集のたびに自動更新できます。
+
+- 収集ワークフローは各チャンネルの**全動画を軽量列挙して台帳(`catalog`)化**し、取得結果
+  （`done`/`no_subs`/`error`）と突き合わせて、ライバー別の収集状況を
+  **`coverage.json`** として `hologlish-data` ブランチと Pages に公開します。
+  - ✅ 完了 / ⏳ 未収集 / — 字幕なし / ⚠ エラー を各動画に付与。
+- Google スプレッドシート側は **Apps Script（[`tools/coverage_sheet.gs`](tools/coverage_sheet.gs)）** を
+  一度貼るだけ。**ライバーごとにタブ**を作り、1時間ごとに `coverage.json` を取得して
+  自動再生成します（サマリータブに全体進捗）。CI に認証情報を置かずに済みます。
+
+セットアップ（初回だけ）:
+
+1. Google スプレッドシートを新規作成 → **拡張機能 → Apps Script**
+2. `tools/coverage_sheet.gs` の内容を貼り付けて保存
+3. 関数 `installHourlyTrigger` を一度実行（権限承認）。以後1時間ごとに自動更新。
+   手動更新はメニュー「HoloGlish → 今すぐ更新」
+
+手元で `coverage.json` を作るには:
+
+```bash
+python -m pipeline.run catalog      # 各チャンネルの全動画を列挙して台帳更新
+python -m pipeline.run coverage --out coverage.json
+```
 
 ### 2. サーバを起動
 
@@ -68,11 +153,62 @@ uvicorn server.app:app --reload
 # → http://localhost:8000
 ```
 
-### 3. ブラウザで検索
+### ブラウザだけで使う（静的サイト / サーバ不要）
+
+収集した索引を**静的サイトとして書き出し、ブラウザ内(クライアントサイド)で検索**できます。
+サーバを常駐させずに、URL を開くだけで使える形です（収集した索引がそのままキャッシュになります）。
+
+```bash
+# 収集済みの索引から静的サイトを site/ に書き出す
+python -m pipeline.run export --out site
+
+# ローカル確認（任意の静的配信でよい）
+python -m http.server --directory site 8000
+# → http://localhost:8000
+```
+
+- 検索・フィルタ・並び順・前後トランスクリプト・連続再生などは、サーバ版と同じ UI が
+  ブラウザ内で動きます（検索ロジックは `web/api.js`）。
+- **スケーリング**: 索引は**トリグラム転置インデックスをシャーディング**して書き出します
+  （`static/idx/manifest.json` ＋ `tri-index.json` ＋ `shard-*.json`）。クライアントは
+  **クエリのトリグラムを含むシャードだけ**を取得して検索するため、全アーカイブ（数十万発話）
+  でも索引全体をダウンロードしません（サーバの FTS5 trigram と同じ部分一致セマンティクス）。
+  1〜2文字の検索はトリグラムが使えないため全シャード走査にフォールバックします。
+- 動画再生は従来どおり YouTube 公式 IFrame プレイヤー経由です。
+
+#### GitHub Pages で公開（自動）
+
+`.github/workflows/pages.yml` が、収集済み索引（`hologlish-data` ブランチ。無ければ
+フィクスチャ）から静的サイトを生成し **GitHub Pages に公開**します。定期収集の完了後や
+`web/` の変更時に自動で再公開されます。
+
+> 初回のみ、リポジトリ Settings → Pages → Source を **GitHub Actions** に設定してください。
+
+これで「収集 → 索引を蓄積（キャッシュ）→ ブラウザから URL で検索」までが自動で回ります。
+
+### 3. サーバ版フロントで検索
+
+メンバー名は**日本語ユーザー向けに日本語表記を優先表示**します（例: 兎田ぺこら）。
+`config/channels.yaml` の `name_ja` を表示に使い、無いメンバー（EN/ID など）は英語表記のままです。
+既存 DB は `python -m pipeline.run backfill-names` で日本語名を補完できます。
 
 検索ボックスに日本語（例:「おはよ」「ぺこ」）や英語（`hello`）を入力。
 結果をクリックすると該当秒から再生され、**前／次の用例**ボタンや連続再生で用例を巡回できます。
-ブランチ・メンバー・言語で絞り込めます。
+ブランチ・メンバー・言語で絞り込め、並び順は **新着順／一致度順** を切り替えられます。
+
+YouGlish のような学習向けの操作に対応しています。
+
+- **再生速度**（0.5×〜1.5×）: 聞き取り練習用にゆっくり再生。
+- **リプレイ／ループ**: 同じ用例を繰り返し再生。
+- **±5秒クリップ**: 該当箇所の前後5秒だけを強調ループ再生（`C` キー）。共有リンクに
+  クリップ状態が載り、リンクを開くとその区間から再生されます（動画DLはせず埋め込み再生のまま）。
+- **前後トランスクリプト**: いま再生中の場面の前後の発話を表示し、クリックでその行へジャンプ。
+- **キーボード操作**: `←`／`→` で用例移動、`Space` で再生・停止、`R` でリプレイ、`L` でループ、`C` で±5秒クリップ。
+- **共有可能なURL**: 検索語・フィルタ・並び順が URL のハッシュに反映され、リロードや共有で復元されます。
+- **用例への深いリンク**: 再生中の用例（動画＋秒）も URL に含まれ、「🔗 共有」ボタンや
+  リンクのコピーで、その用例へ直接ジャンプできる共有リンクになります。
+- **最近の検索**: 直近の検索語を端末内（localStorage）に保存し、トップページから
+  ワンクリックで再検索できます（「クリア」で消去可能）。
 
 ## 対象範囲について（重要）
 
@@ -101,8 +237,10 @@ uvicorn server.app:app --port 8000
 
 | エンドポイント | 説明 |
 | --- | --- |
-| `GET /api/search?q=&member=&branch=&lang=&page=&page_size=` | 字幕検索（JSON） |
+| `GET /api/search?q=&member=&branch=&lang=&sort=&page=&page_size=` | 字幕検索（JSON）。`sort` は `date`（既定）/ `relevance` |
+| `GET /api/context?video_id=&start=&window=` | 用例の前後トランスクリプト（その場面の周辺発話） |
 | `GET /api/facets` | フィルタ候補（メンバー・ブランチ・言語） |
+| `GET /api/stats` | インデックスのカバレッジ統計（動画数・発話数・メンバー数） |
 | `GET /` | 検索フロント |
 
 ## 環境変数
