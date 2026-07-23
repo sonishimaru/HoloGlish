@@ -66,7 +66,19 @@ def cmd_collect(args: argparse.Namespace) -> int:
     db.init_db(conn)
     total_segments = 0
 
+    # 時間予算（秒）。ジョブのハードタイムアウトで強制中断され公開が中途半端に
+    # なるのを避けるため、予算に達したら区切りよく収集を打ち切る（再開可能）。
+    budget = args.time_budget if args.time_budget and args.time_budget > 0 else None
+    deadline = (time.monotonic() + budget) if budget else None
+
+    def _over_budget() -> bool:
+        return deadline is not None and time.monotonic() >= deadline
+
+    stopped = False
     for ch in channels:
+        if _over_budget():
+            stopped = True
+            break
         cid, member, branch = ch["channel_id"], ch["member"], ch["branch"]
         member_ja = ch.get("name_ja") or ""
         lang_order = _lang_order(ch.get("lang"))
@@ -81,6 +93,9 @@ def cmd_collect(args: argparse.Namespace) -> int:
             continue
 
         for v in videos:
+            if _over_budget():
+                stopped = True
+                break
             vid = v["video_id"]
             if not args.force and db.is_processed(conn, vid):
                 continue
@@ -120,8 +135,14 @@ def cmd_collect(args: argparse.Namespace) -> int:
                 conn.commit()
                 print(f"  ! {vid} 失敗: {e}", file=sys.stderr)
             time.sleep(args.sleep)  # レート制限（YouTube への配慮）
+        if stopped:
+            break
 
-    print(f"完了: 合計 {total_segments} セグメントを追加/更新")
+    if stopped:
+        print(f"時間予算({int(budget)}秒)に達したため区切りました（次回続行）: "
+              f"合計 {total_segments} セグメントを追加/更新")
+    else:
+        print(f"完了: 合計 {total_segments} セグメントを追加/更新")
     conn.close()
     return 0
 
@@ -236,6 +257,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     c.add_argument("--sleep", type=float, default=1.0, help="動画間の待機秒（レート制限）")
     c.add_argument("--retries", type=int, default=3, help="一過性エラー(429等)のリトライ回数")
     c.add_argument("--retry-base", type=float, default=2.0, help="リトライの基本待機秒（指数バックオフ）")
+    c.add_argument("--time-budget", type=float, default=0.0,
+                   help="収集の時間予算（秒）。0で無制限。超過時は区切りよく打ち切る（再開可能）")
     c.add_argument("--force", action="store_true", help="処理済みも再取得")
     c.set_defaults(func=cmd_collect)
 
