@@ -89,6 +89,13 @@ def cmd_collect(args: argparse.Namespace) -> int:
     def _over_budget() -> bool:
         return deadline is not None and time.monotonic() >= deadline
 
+    # 連続失敗ブレーカー。IPブロック/レート制限中に回すと全てが error になり、
+    # 空振りのアクセスがブロックを延長してしまう。連続 N 本失敗したら「ブロック中」
+    # とみなして収集を即打ち切り、公開へ進む（0 で無効）。
+    streak_limit = getattr(args, "error_streak", 30) or 0
+    error_streak = 0
+    tripped = False
+
     stopped = False
     for ch in channels:
         if _over_budget():
@@ -178,19 +185,31 @@ def cmd_collect(args: argparse.Namespace) -> int:
                 db.mark_processed(conn, vid, "done", _now())
                 conn.commit()
                 total_segments += n
+                error_streak = 0
                 print(f"  + {vid} [{lang}/{sub_kind}/{src}] {n} segments")
             elif err is not None:
                 db.mark_processed(conn, vid, "error", _now())
                 conn.commit()
+                error_streak += 1
                 print(f"  ! {vid} 失敗: {err}", file=sys.stderr)
+                if streak_limit and error_streak >= streak_limit:
+                    tripped = True
+                    stopped = True
+                    break
             else:
                 db.mark_processed(conn, vid, "no_subs", _now())
                 conn.commit()
+                error_streak = 0
             time.sleep(args.sleep)  # レート制限（YouTube への配慮）
         if stopped:
             break
 
-    if stopped:
+    if tripped:
+        print(f"連続 {error_streak} 本の失敗を検知したため収集を打ち切りました。"
+              f"IPブロック/レート制限中の可能性が高いです。しばらく（数時間〜1日）待つか、"
+              f"ルーター再起動でIPを変えてから再開してください（error は次回リトライされます）: "
+              f"新規 {new_total} 本 / 合計 {total_segments} セグメントを追加/更新")
+    elif stopped:
         print(f"時間予算({int(budget)}秒)に達したため区切りました（次回続行）: "
               f"新規 {new_total} 本 / 合計 {total_segments} セグメントを追加/更新")
     else:
@@ -386,6 +405,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="列挙するチャンネルタブ（カンマ区切り）。既定は動画＋ライブアーカイブ")
     c.add_argument("--subs-source", choices=["ytdlp", "api", "both"], default="both",
                    help="字幕取得経路: ytdlp / api(youtube-transcript-api) / both(ytdlp→apiフォールバック)")
+    c.add_argument("--error-streak", type=int, default=30,
+                   help="連続失敗がこの本数に達したら収集を打ち切る（IPブロック検知。0で無効）")
     c.add_argument("--force", action="store_true", help="処理済みも再取得")
     c.set_defaults(func=cmd_collect)
 
