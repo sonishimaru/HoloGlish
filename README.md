@@ -69,6 +69,16 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+**JavaScript ランタイム（Deno）を推奨**: 新しめの yt-dlp は YouTube 抽出に JS ランタイムが
+必要です（無いと `No supported JavaScript runtime could be found` の警告が出て抽出が失敗しやすい）。
+**Deno** を入れておくと安定します（yt-dlp が自動検出）。
+
+```bash
+brew install deno              # macOS (Homebrew)
+# もしくは: curl -fsSL https://deno.land/install.sh | sh
+deno --version                 # 確認
+```
+
 ## 使い方
 
 ### 1. 字幕を収集してインデックスを作る（YouTube アクセスが必要）
@@ -86,6 +96,11 @@ python -m pipeline.run collect --branch en --date-after 20240101 --limit 30
 
 - 一度処理した動画は記録され、次回以降スキップされます（**再開可能**）。再取得は `--force`。
 - `--sleep`（既定1秒）で動画間の待機を調整し、YouTube への負荷を抑えます。
+- **レート制限を受けたら（`RequestBlocked` / `too many requests`）**: 住宅IPでも短時間に大量
+  アクセスすると YouTube に一時ブロックされます。**15〜30分ほど待って**から、`--sleep` を上げ
+  （例 `SLEEP=3`）、1回の本数を減らして（例 `LIMIT=20`）ゆっくり回すと回復します。Deno を
+  入れて yt-dlp 本体で取得できるようにすると、フォールバック(transcript-api)への過剰アクセスが
+  減り、レート制限も起きにくくなります。
 - **レート制限（HTTP 429 / bot 確認要求）は一過性エラーとして指数バックオフで自動リトライ**します。
   回数は `--retries`（既定3）、基本待機秒は `--retry-base`（既定2秒）で調整できます。
   リトライしても回復しない動画は `error`（次回実行で再取得対象）として記録し、
