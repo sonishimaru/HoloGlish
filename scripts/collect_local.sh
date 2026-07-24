@@ -14,12 +14,60 @@
 # 任意の環境変数:
 #   LIMIT(30) / MEMBERS / BRANCH / SLEEP(1.5) / SUBS(both) / TIME_BUDGET(0=無制限)
 #   HOLOGLISH_COOKIES … ブラウザから書き出した cookies ファイルパス（年齢制限対策・任意）
+#   HOME_SSID … 自宅Wi-Fiのネットワーク名。設定すると「自宅ネットのときだけ」収集し、
+#               それ以外（職場など）では自動スキップする。複数はカンマ区切り。
+#   FORCE=1  … 自宅判定を無視して強制実行（HOME_SSID ガードを無効化）。
 #
 # 定期実行するなら cron / タスクスケジューラ / launchd から本スクリプトを呼ぶ。
 set -euo pipefail
 
 cd "$(dirname "$0")/.."            # リポジトリのルートへ
 ORIGIN_URL="$(git remote get-url origin)"
+
+# --- 現在接続中の Wi-Fi ネットワーク名(SSID)を返す（macOS / Linux / Windows対応） ---
+current_ssid() {
+  # macOS
+  if command -v networksetup >/dev/null 2>&1; then
+    for i in en0 en1 en2; do
+      s=$(networksetup -getairportnetwork "$i" 2>/dev/null | sed -n 's/^Current Wi-Fi Network: //p')
+      [ -n "$s" ] && { printf '%s' "$s"; return 0; }
+    done
+    # 新しめの macOS 向けフォールバック
+    s=$(ipconfig getsummary en0 2>/dev/null | awk -F ' : ' '/ SSID/ && !/BSSID/ {print $2; exit}')
+    [ -n "$s" ] && { printf '%s' "$s"; return 0; }
+  fi
+  # Linux
+  if command -v nmcli >/dev/null 2>&1; then
+    s=$(nmcli -t -f active,ssid dev wifi 2>/dev/null | awk -F: '/^yes:/{print $2; exit}')
+    [ -n "$s" ] && { printf '%s' "$s"; return 0; }
+  fi
+  if command -v iwgetid >/dev/null 2>&1; then
+    s=$(iwgetid -r 2>/dev/null); [ -n "$s" ] && { printf '%s' "$s"; return 0; }
+  fi
+  # Windows (Git Bash)
+  if command -v netsh >/dev/null 2>&1; then
+    s=$(netsh wlan show interfaces 2>/dev/null \
+        | sed -n 's/^[[:space:]]*SSID[[:space:]]*:[[:space:]]*//p' | head -1)
+    [ -n "$s" ] && { printf '%s' "$s"; return 0; }
+  fi
+  return 1
+}
+
+# --- 自宅ネット・ガード（職場での誤発動を防ぐ） ---
+if [ -n "${HOME_SSID:-}" ] && [ "${FORCE:-0}" != "1" ]; then
+  ssid="$(current_ssid || true)"
+  if [ -z "$ssid" ]; then
+    echo "現在の Wi-Fi 名を取得できませんでした。安全のため収集をスキップします。"
+    echo "（自宅で実行しているのにスキップされる場合は macOS の「位置情報サービス」で"
+    echo "  ターミナルに許可を与えるか、FORCE=1 を付けて実行してください）"
+    exit 0
+  fi
+  case ",$HOME_SSID," in
+    *",$ssid,"*) echo "自宅ネット「$ssid」を確認。収集を続行します。" ;;
+    *) echo "現在の Wi-Fi「$ssid」は自宅(HOME_SSID=$HOME_SSID)ではないためスキップします。"
+       exit 0 ;;
+  esac
+fi
 
 DB="data/hologlish.db"
 LIMIT="${LIMIT:-30}"
