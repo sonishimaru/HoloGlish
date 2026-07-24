@@ -128,6 +128,9 @@ BRANCH=jp bash scripts/collect_local.sh
 - 再開可能なので、**繰り返し実行するほど過去アーカイブへ前進**します（全アーカイブは数週間）。
 - 定期化するなら **cron / タスクスケジューラ / launchd** から `scripts/collect_local.sh` を呼びます。
   例（毎日3時に実行, crontab）: `0 3 * * * cd /path/to/HoloGlish && bash scripts/collect_local.sh`
+- **自宅ネット・ガード**（持ち出しノートPC向け）: `HOME_SSID` に自宅Wi-Fiの名前を設定すると
+  **自宅ネットのときだけ収集**し、職場などでは自動スキップします（社内ネットでの誤実行を防止）。
+  例: `HOME_SSID="MyHomeWiFi" bash scripts/collect_local.sh`。複数はカンマ区切り。`FORCE=1` で無効化。
 - `HOLOGLISH_COOKIES` にブラウザから書き出した cookies を渡すと年齢制限動画も取得できます（任意）。
 
 #### 完全自動化: セルフホストrunner（任意）
