@@ -20,18 +20,17 @@ T = TypeVar("T")
 # ブラウザから書き出した cookies ファイルのパスを環境変数で渡せると緩和できる。
 COOKIES_ENV = "HOLOGLISH_COOKIES"
 
-# yt-dlp の innertube クライアント。既定の web クライアントはデータセンターIPで
-# 「Sign in to confirm you're not a bot」を出しやすい。別クライアントに切り替えると
-# 回避できる場合があるため、環境変数で調整可能にする（カンマ区切り）。
-# 空文字/"default" を渡すと yt-dlp 既定に任せる。
+# yt-dlp の innertube クライアント。既定は yt-dlp 標準に任せる（住宅IPでは標準が最良）。
+# 特定クライアント（例 tv）を強制すると "The page needs to be reloaded" が多発する
+# ことがあるため、既定では上書きしない。cookies無しのデータセンターIP等で bot 判定を
+# 避けたい場合のみ、環境変数 HOLOGLISH_PLAYER_CLIENTS にカンマ区切りで指定する。
 PLAYER_CLIENTS_ENV = "HOLOGLISH_PLAYER_CLIENTS"
-_DEFAULT_PLAYER_CLIENTS = ["tv", "mweb", "web_safari"]
 
 
 def _player_clients() -> list | None:
     raw = os.environ.get(PLAYER_CLIENTS_ENV)
     if raw is None:
-        return list(_DEFAULT_PLAYER_CLIENTS)
+        return None  # 既定: yt-dlp 標準のクライアント選択に任せる
     raw = raw.strip()
     if not raw or raw.lower() == "default":
         return None  # yt-dlp 既定のクライアント選択に任せる

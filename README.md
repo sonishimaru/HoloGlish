@@ -131,6 +131,9 @@ BRANCH=jp bash scripts/collect_local.sh
 - **自宅ネット・ガード**（持ち出しノートPC向け）: `HOME_SSID` に自宅Wi-Fiの名前を設定すると
   **自宅ネットのときだけ収集**し、職場などでは自動スキップします（社内ネットでの誤実行を防止）。
   例: `HOME_SSID="MyHomeWiFi" bash scripts/collect_local.sh`。複数はカンマ区切り。`FORCE=1` で無効化。
+- **台帳の全体更新は既定オフ**: 収集(collect)は処理する各チャンネルを全件列挙して台帳も更新するため、
+  前段での全台帳列挙は二度手間で遅くなります。全チャンネルの母集合を最新化したいとき（**月1回程度**）
+  だけ `CATALOG=1 bash scripts/collect_local.sh` で実行します。通常の収集は台帳全体更新を省いて高速。
 - `HOLOGLISH_COOKIES` にブラウザから書き出した cookies を渡すと年齢制限動画も取得できます（任意）。
 
 #### 完全自動化: セルフホストrunner（任意）

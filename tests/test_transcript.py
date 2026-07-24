@@ -8,9 +8,10 @@ from pipeline import _net, fetch_subtitles, run
 # ---- ① player_client（_net） ----
 
 def test_player_clients_default(monkeypatch):
+    # 既定は yt-dlp 標準に任せる（player_client を上書きしない）
     monkeypatch.delenv(_net.PLAYER_CLIENTS_ENV, raising=False)
     yt = _net.common_ydl_opts()["extractor_args"]["youtube"]
-    assert yt["player_client"] == ["tv", "mweb", "web_safari"]
+    assert "player_client" not in yt
 
 
 def test_player_clients_disabled(monkeypatch):

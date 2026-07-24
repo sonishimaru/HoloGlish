@@ -17,6 +17,8 @@
 #   HOME_SSID … 自宅Wi-Fiのネットワーク名。設定すると「自宅ネットのときだけ」収集し、
 #               それ以外（職場など）では自動スキップする。複数はカンマ区切り。
 #   FORCE=1  … 自宅判定を無視して強制実行（HOME_SSID ガードを無効化）。
+#   CATALOG=1 … 全チャンネルの台帳(未収集の母集合)を最新化してから収集する（月1回程度で十分）。
+#               既定は行わない（収集が触れた分は自動更新されるため速い）。
 #
 # 定期実行するなら cron / タスクスケジューラ / launchd から本スクリプトを呼ぶ。
 set -euo pipefail
@@ -96,10 +98,18 @@ else
   echo "    hologlish-data ブランチが無いため新規作成します"
 fi
 
-echo "==> 台帳(catalog)を更新（未収集の母集合）"
-python -m pipeline.run catalog \
-  ${BRANCH:+--branch "$BRANCH"} ${MEMBERS:+--members "$MEMBERS"} \
-  --sleep 1 --retries 3 --retry-base 5 || echo "    catalog 更新をスキップ（続行）"
+# 台帳(未収集の母集合)の全体更新は既定では行わない。
+# 収集(collect)ステップが処理する各チャンネルを全件列挙して台帳も更新するため、
+# 前段での全台帳列挙は多くが二度手間になり時間がかかる。全チャンネルの母集合を
+# きっちり最新化したいとき（月1回など）だけ CATALOG=1 で実行する。
+if [ "${CATALOG:-0}" = "1" ]; then
+  echo "==> 台帳(catalog)を全体更新（未収集の母集合・時間がかかります）"
+  python -m pipeline.run catalog \
+    ${BRANCH:+--branch "$BRANCH"} ${MEMBERS:+--members "$MEMBERS"} \
+    --sleep 1 --retries 3 --retry-base 5 || echo "    catalog 更新をスキップ（続行）"
+else
+  echo "==> 台帳の全体更新はスキップ（CATALOG=1 で実行可）。収集が触れた分は自動更新されます"
+fi
 
 echo "==> 字幕を収集"
 python -m pipeline.run collect \
