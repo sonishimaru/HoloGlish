@@ -19,6 +19,11 @@
 #   FORCE=1  … 自宅判定を無視して強制実行（HOME_SSID ガードを無効化）。
 #   CATALOG=1 … 全チャンネルの台帳(未収集の母集合)を最新化してから収集する（月1回程度で十分）。
 #               既定は行わない（収集が触れた分は自動更新されるため速い）。
+#   PUBLISH_ONLY=1 … 収集はせず、手元の索引(data/hologlish.db)をそのまま公開だけする。
+#               収集を Ctrl+C で止めた後などに「集めた分だけ書き込みたい」ときに使う。
+#
+# 補足: 通常は収集完了時に自動で公開します。一定時間で区切って自動公開したいときは
+#       TIME_BUDGET（秒）を指定（例 TIME_BUDGET=3600 で1時間収集して公開）。
 #
 # 定期実行するなら cron / タスクスケジューラ / launchd から本スクリプトを呼ぶ。
 set -euo pipefail
@@ -64,7 +69,8 @@ current_ssid() {
 }
 
 # --- 自宅ネット・ガード（職場での誤発動を防ぐ） ---
-if [ -n "${HOME_SSID:-}" ] && [ "${FORCE:-0}" != "1" ]; then
+# PUBLISH_ONLY（書き込みのみ）や FORCE=1 のときはガードを適用しない。
+if [ -n "${HOME_SSID:-}" ] && [ "${FORCE:-0}" != "1" ] && [ "${PUBLISH_ONLY:-0}" != "1" ]; then
   ssid="$(current_ssid || true)"
   if [ -z "$ssid" ]; then
     echo "現在の Wi-Fi 名を取得できませんでした。安全のため収集をスキップします。"
@@ -89,33 +95,40 @@ BRANCH="${BRANCH:-}"
 
 mkdir -p data
 
-echo "==> 既存の索引を hologlish-data から復元"
-if git fetch origin hologlish-data 2>/dev/null; then
-  git show origin/hologlish-data:hologlish.db > "$DB" 2>/dev/null \
-    && echo "    既存索引を復元しました" \
-    || echo "    索引ファイルが無いため新規作成します"
+if [ "${PUBLISH_ONLY:-0}" = "1" ]; then
+  # 書き込み専用モード: 収集はせず、手元の索引をそのまま公開する
+  # （収集を Ctrl+C で止めた後などに、集めた分だけ書き込みたいとき用）。
+  echo "==> 書き込み専用モード（収集はスキップ）。手元の索引をそのまま公開します"
+  [ -f "$DB" ] || { echo "    $DB が見つかりません。先に収集してください。" >&2; exit 1; }
 else
-  echo "    hologlish-data ブランチが無いため新規作成します"
-fi
+  echo "==> 既存の索引を hologlish-data から復元"
+  if git fetch origin hologlish-data 2>/dev/null; then
+    git show origin/hologlish-data:hologlish.db > "$DB" 2>/dev/null \
+      && echo "    既存索引を復元しました" \
+      || echo "    索引ファイルが無いため新規作成します"
+  else
+    echo "    hologlish-data ブランチが無いため新規作成します"
+  fi
 
-# 台帳(未収集の母集合)の全体更新は既定では行わない。
-# 収集(collect)ステップが処理する各チャンネルを全件列挙して台帳も更新するため、
-# 前段での全台帳列挙は多くが二度手間になり時間がかかる。全チャンネルの母集合を
-# きっちり最新化したいとき（月1回など）だけ CATALOG=1 で実行する。
-if [ "${CATALOG:-0}" = "1" ]; then
-  echo "==> 台帳(catalog)を全体更新（未収集の母集合・時間がかかります）"
-  python -m pipeline.run catalog \
+  # 台帳(未収集の母集合)の全体更新は既定では行わない。
+  # 収集(collect)ステップが処理する各チャンネルを全件列挙して台帳も更新するため、
+  # 前段での全台帳列挙は多くが二度手間になり時間がかかる。全チャンネルの母集合を
+  # きっちり最新化したいとき（月1回など）だけ CATALOG=1 で実行する。
+  if [ "${CATALOG:-0}" = "1" ]; then
+    echo "==> 台帳(catalog)を全体更新（未収集の母集合・時間がかかります）"
+    python -m pipeline.run catalog \
+      ${BRANCH:+--branch "$BRANCH"} ${MEMBERS:+--members "$MEMBERS"} \
+      --sleep 1 --retries 3 --retry-base 5 || echo "    catalog 更新をスキップ（続行）"
+  else
+    echo "==> 台帳の全体更新はスキップ（CATALOG=1 で実行可）。収集が触れた分は自動更新されます"
+  fi
+
+  echo "==> 字幕を収集"
+  python -m pipeline.run collect \
     ${BRANCH:+--branch "$BRANCH"} ${MEMBERS:+--members "$MEMBERS"} \
-    --sleep 1 --retries 3 --retry-base 5 || echo "    catalog 更新をスキップ（続行）"
-else
-  echo "==> 台帳の全体更新はスキップ（CATALOG=1 で実行可）。収集が触れた分は自動更新されます"
+    --limit "$LIMIT" --list-depth 0 --subs-source "$SUBS" \
+    --sleep "$SLEEP" --time-budget "$TIME_BUDGET" --retries 4 --retry-base 5
 fi
-
-echo "==> 字幕を収集"
-python -m pipeline.run collect \
-  ${BRANCH:+--branch "$BRANCH"} ${MEMBERS:+--members "$MEMBERS"} \
-  --limit "$LIMIT" --list-depth 0 --subs-source "$SUBS" \
-  --sleep "$SLEEP" --time-budget "$TIME_BUDGET" --retries 4 --retry-base 5
 
 echo "==> 収集状況 coverage.json を生成"
 python -m pipeline.run coverage --out data/coverage.json || true

@@ -149,6 +149,10 @@ BRANCH=jp bash scripts/collect_local.sh
 - **台帳の全体更新は既定オフ**: 収集(collect)は処理する各チャンネルを全件列挙して台帳も更新するため、
   前段での全台帳列挙は二度手間で遅くなります。全チャンネルの母集合を最新化したいとき（**月1回程度**）
   だけ `CATALOG=1 bash scripts/collect_local.sh` で実行します。通常の収集は台帳全体更新を省いて高速。
+- **公開（書き込み）は自動**: `collect_local.sh` は収集が終わると自動で `hologlish-data` へ公開します。
+  途中で `Ctrl+C` しても、それまでに集めた分は `data/hologlish.db` に保存済みです。
+  - **一定時間で区切って自動公開**: `TIME_BUDGET=3600 bash scripts/collect_local.sh`（秒。例は1時間）。
+  - **集めた分だけ今すぐ書き込む**（Ctrl+C の後など、収集せず公開だけ）: `PUBLISH_ONLY=1 bash scripts/collect_local.sh`
 - `HOLOGLISH_COOKIES` にブラウザから書き出した cookies を渡すと年齢制限動画も取得できます（任意）。
 
 #### 完全自動化: セルフホストrunner（任意）
