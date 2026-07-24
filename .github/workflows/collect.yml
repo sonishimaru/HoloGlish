@@ -41,6 +41,14 @@ on:
         description: "収集の時間予算（秒）。ジョブ上限より手前で区切り公開に到達させる（既定18000=5時間）"
         required: false
         default: "18000"
+      subs_source:
+        description: "字幕取得経路 ytdlp/api/both（bot判定回避のフォールバック。既定both）"
+        required: false
+        default: "both"
+      player_clients:
+        description: "yt-dlp の innertube クライアント（カンマ区切り）。default で既定。bot判定回避用"
+        required: false
+        default: ""
 
 # 索引を hologlish-data ブランチへ push するために書き込み権限が必要
 permissions:
@@ -128,11 +136,16 @@ jobs:
           # ジョブ上限(350分=21000秒)より手前で区切り、必ず公開ステップに到達させる。
           # 収集は再開可能なので、繰り返し実行で未取得分を積み上げる。
           TIME_BUDGET: ${{ inputs.time_budget || '18000' }}
+          # 字幕取得経路（bot判定回避）。both=yt-dlp→api フォールバック。
+          SUBS_SOURCE: ${{ inputs.subs_source || 'both' }}
+          # yt-dlp の innertube クライアント切替（bot判定回避）。空なら pipeline 既定。
+          HOLOGLISH_PLAYER_CLIENTS: ${{ inputs.player_clients }}
         run: |
           python -m pipeline.run collect \
             ${BRANCH:+--branch "$BRANCH"} \
             ${MEMBERS:+--members "$MEMBERS"} \
             --limit "$LIMIT" --list-depth "$LIST_DEPTH" --time-budget "$TIME_BUDGET" \
+            --subs-source "$SUBS_SOURCE" \
             --sleep "$SLEEP" --retries 4 --retry-base 5
 
       # 収集分を反映して coverage.json を作り直す
