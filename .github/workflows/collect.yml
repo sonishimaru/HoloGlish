@@ -1,20 +1,21 @@
 name: Scheduled Collect
 
-# HoloGlish の字幕を定期的に自動収集し、生成した索引(DB)を専用ブランチ
-# `hologlish-data` に蓄積する。main の作業ツリーは汚さない。
-# （このワークフローを GitHub に確実に登録・有効化するための再登録済み）
+# HoloGlish の字幕を収集し、生成した索引(DB)を専用ブランチ `hologlish-data`
+# に蓄積する。main の作業ツリーは汚さない。
 #
-# 注意: GitHub ランナーの IP は YouTube に bot 判定されやすい。安定運用には
-# リポジトリ Secret `YT_COOKIES`（ブラウザから書き出した Netscape 形式 cookies）
-# を設定すると緩和できる。未設定でも動くが 429 / Sign-in 要求で一部失敗しうる。
+# 【重要】GitHub のクラウドIPは YouTube に IP レベルでブロックされ、
+# 字幕取得（yt-dlp・youtube-transcript-api とも）が通らないことが判明した。
+# そのため **クラウドの定期スケジュールは無効化** している。
+# 収集は「住宅IPの自分のPC」で `scripts/collect_local.sh` を実行するか、
+# 自宅回線に登録した **セルフホストrunner**（runs-on: self-hosted）で行う。
+# このワークフローは手動実行(workflow_dispatch)用に残している
+# （セルフホストrunner を使う場合は下の runs-on を self-hosted に変更）。
 
 on:
-  schedule:
-    # 6時間ごと。1実行あたり各チャンネル最大 limit 本を収集し、確実に公開する。
-    # 全アーカイブは繰り返し実行（再開可能）で未取得分を積み上げて到達する。
-    # ※上限なしにするとジョブがタイムアウトし、末尾の公開ステップが走らず
-    #   その実行の収集分が失われるため、必ず1実行を区切る設計にしている。
-    - cron: "0 */6 * * *"
+  # クラウドIPがブロックされるため schedule は無効化（住宅IPで実行する）。
+  # セルフホストrunner を自宅に登録したら、下の cron を復活させて自動化できる。
+  # schedule:
+  #   - cron: "0 */6 * * *"
   workflow_dispatch:
     inputs:
       branch:
