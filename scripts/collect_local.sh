@@ -62,9 +62,9 @@ if [ -n "${HOME_SSID:-}" ] && [ "${FORCE:-0}" != "1" ]; then
     echo "  ターミナルに許可を与えるか、FORCE=1 を付けて実行してください）"
     exit 0
   fi
-  case ",$HOME_SSID," in
-    *",$ssid,"*) echo "自宅ネット「$ssid」を確認。収集を続行します。" ;;
-    *) echo "現在の Wi-Fi「$ssid」は自宅(HOME_SSID=$HOME_SSID)ではないためスキップします。"
+  case ",${HOME_SSID}," in
+    *",${ssid},"*) echo "自宅ネット「${ssid}」を確認。収集を続行します。" ;;
+    *) echo "現在の Wi-Fi「${ssid}」は自宅(HOME_SSID=${HOME_SSID})ではないためスキップします。"
        exit 0 ;;
   esac
 fi
