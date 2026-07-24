@@ -20,18 +20,40 @@ T = TypeVar("T")
 # ブラウザから書き出した cookies ファイルのパスを環境変数で渡せると緩和できる。
 COOKIES_ENV = "HOLOGLISH_COOKIES"
 
+# yt-dlp の innertube クライアント。既定の web クライアントはデータセンターIPで
+# 「Sign in to confirm you're not a bot」を出しやすい。別クライアントに切り替えると
+# 回避できる場合があるため、環境変数で調整可能にする（カンマ区切り）。
+# 空文字/"default" を渡すと yt-dlp 既定に任せる。
+PLAYER_CLIENTS_ENV = "HOLOGLISH_PLAYER_CLIENTS"
+_DEFAULT_PLAYER_CLIENTS = ["tv", "mweb", "web_safari"]
+
+
+def _player_clients() -> list | None:
+    raw = os.environ.get(PLAYER_CLIENTS_ENV)
+    if raw is None:
+        return list(_DEFAULT_PLAYER_CLIENTS)
+    raw = raw.strip()
+    if not raw or raw.lower() == "default":
+        return None  # yt-dlp 既定のクライアント選択に任せる
+    return [c.strip() for c in raw.split(",") if c.strip()]
+
 
 def common_ydl_opts() -> Dict[str, Any]:
     """全 yt-dlp 呼び出しに共通で足すオプション。
 
     - ``HOLOGLISH_COOKIES`` にファイルパスが設定され、かつ実在すれば
       ``cookiefile`` として渡す（bot 判定・年齢制限の緩和）。
+    - ``HOLOGLISH_PLAYER_CLIENTS`` で innertube クライアントを切替（bot 判定回避）。
     - 字幕しか使わないので、動画フォーマット(DASH/HLS)の manifest 取得と
       翻訳字幕の列挙をスキップし、抽出(extract_info)を大幅に軽量化する。
       （原語の手動/自動字幕は影響を受けない。収集を速くする狙い。）
     """
+    youtube_args: Dict[str, Any] = {"skip": ["hls", "dash", "translated_subs"]}
+    clients = _player_clients()
+    if clients:
+        youtube_args["player_client"] = clients
     opts: Dict[str, Any] = {
-        "extractor_args": {"youtube": {"skip": ["hls", "dash", "translated_subs"]}},
+        "extractor_args": {"youtube": youtube_args},
         "youtube_include_dash_manifest": False,
         "youtube_include_hls_manifest": False,
     }

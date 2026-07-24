@@ -92,6 +92,14 @@ python -m pipeline.run collect --branch en --date-after 20240101 --limit 30
   字幕が存在しない動画（`no_subs`）とは区別されます。
 - **cookies 対応**: 環境変数 `HOLOGLISH_COOKIES` にブラウザから書き出した
   Netscape 形式の cookies ファイルパスを渡すと、bot 判定・年齢制限を緩和できます。
+- **bot 判定の回避策**（データセンターIP対策）:
+  - `--subs-source`（既定 `both`）: 字幕取得経路を `ytdlp` / `api`（youtube-transcript-api・
+    別経路の timedtext）/ `both`（yt-dlp→api フォールバック）から選べます。yt-dlp が
+    「Sign in to confirm you're not a bot」で弾かれても api 経路なら通ることがあります。
+  - `HOLOGLISH_PLAYER_CLIENTS`（既定 `tv,mweb,web_safari`）: yt-dlp の innertube クライアントを
+    切り替えて bot 判定を回避します。`default` で yt-dlp 既定に戻します。
+  - いずれも根本的にはIPレピュテーション依存です。安定運用は cookies + 住宅IP（プロキシ/
+    セルフホスト）が確実です。
 
 ### 自動収集（スケジュール実行）
 
