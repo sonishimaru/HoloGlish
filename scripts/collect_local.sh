@@ -24,30 +24,38 @@ set -euo pipefail
 cd "$(dirname "$0")/.."            # リポジトリのルートへ
 ORIGIN_URL="$(git remote get-url origin)"
 
+# 前後の空白を除去（ipconfig 等の出力は末尾に空白が付くことがある）
+_trim() { sed 's/^[[:space:]]*//; s/[[:space:]]*$//'; }
+
 # --- 現在接続中の Wi-Fi ネットワーク名(SSID)を返す（macOS / Linux / Windows対応） ---
 current_ssid() {
-  # macOS
-  if command -v networksetup >/dev/null 2>&1; then
+  s=""
+  # macOS: 新しめのOSでは networksetup/airport が SSID を返さないため
+  # ipconfig getsummary を最優先で使う（BSSID 行は除外し、'SSID : ' 以降を採用）。
+  if command -v ipconfig >/dev/null 2>&1; then
     for i in en0 en1 en2; do
-      s=$(networksetup -getairportnetwork "$i" 2>/dev/null | sed -n 's/^Current Wi-Fi Network: //p')
+      s=$(ipconfig getsummary "$i" 2>/dev/null | awk -F 'SSID : ' '/ SSID : /{print $2; exit}' | _trim)
       [ -n "$s" ] && { printf '%s' "$s"; return 0; }
     done
-    # 新しめの macOS 向けフォールバック
-    s=$(ipconfig getsummary en0 2>/dev/null | awk -F ' : ' '/ SSID/ && !/BSSID/ {print $2; exit}')
-    [ -n "$s" ] && { printf '%s' "$s"; return 0; }
+  fi
+  if command -v networksetup >/dev/null 2>&1; then
+    for i in en0 en1 en2; do
+      s=$(networksetup -getairportnetwork "$i" 2>/dev/null | sed -n 's/^Current Wi-Fi Network: //p' | _trim)
+      [ -n "$s" ] && { printf '%s' "$s"; return 0; }
+    done
   fi
   # Linux
   if command -v nmcli >/dev/null 2>&1; then
-    s=$(nmcli -t -f active,ssid dev wifi 2>/dev/null | awk -F: '/^yes:/{print $2; exit}')
+    s=$(nmcli -t -f active,ssid dev wifi 2>/dev/null | awk -F: '/^yes:/{print $2; exit}' | _trim)
     [ -n "$s" ] && { printf '%s' "$s"; return 0; }
   fi
   if command -v iwgetid >/dev/null 2>&1; then
-    s=$(iwgetid -r 2>/dev/null); [ -n "$s" ] && { printf '%s' "$s"; return 0; }
+    s=$(iwgetid -r 2>/dev/null | _trim); [ -n "$s" ] && { printf '%s' "$s"; return 0; }
   fi
   # Windows (Git Bash)
   if command -v netsh >/dev/null 2>&1; then
     s=$(netsh wlan show interfaces 2>/dev/null \
-        | sed -n 's/^[[:space:]]*SSID[[:space:]]*:[[:space:]]*//p' | head -1)
+        | sed -n 's/^[[:space:]]*SSID[[:space:]]*:[[:space:]]*//p' | head -1 | _trim)
     [ -n "$s" ] && { printf '%s' "$s"; return 0; }
   fi
   return 1
