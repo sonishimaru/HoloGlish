@@ -203,6 +203,84 @@ def fetch_transcript_api(
     return segments, getattr(tr, "language_code", lang_order[0]).split("-")[0], kind
 
 
+# ---- 有償の字幕取得サービス経路（Supadata） ----------------------------------
+# YouTube への直接アクセスを業者が肩代わりするため、IPブロック/レート制限の影響を
+# 受けない（クラウド自動化に最適）。mode=native（既存字幕のみ・1本=1クレジット）を
+# 使い、高額な AI 生成（2クレジット/分）は使わない。
+SERVICE_KEY_ENV = "SUPADATA_API_KEY"
+SERVICE_URL = "https://api.supadata.ai/v1/youtube/transcript"
+
+
+def _service_get(url: str, key: str, timeout: float = 60.0):
+    """HTTP GET → (status, parsed_json)。テストで差し替えやすいよう分離。"""
+    import json as _json
+    import urllib.request
+
+    req = urllib.request.Request(url, headers={"x-api-key": key})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.status, _json.loads(r.read().decode("utf-8"))
+
+
+def service_configured() -> bool:
+    return bool(os.environ.get(SERVICE_KEY_ENV, "").strip())
+
+
+def fetch_transcript_service(
+    video_id: str, lang_order: Optional[List[str]] = None,
+) -> Optional[Tuple[List[Dict[str, Any]], str, str]]:
+    """Supadata transcript API で字幕を取得する（サービス経路）。
+
+    戻り値: (segments, lang, sub_kind) / 字幕が無ければ None（= no_subs）。
+    認証エラー・クォータ超過・その他の失敗は例外を送出（= error、次回リトライ）。
+    """
+    import urllib.error
+    import urllib.parse
+
+    key = os.environ.get(SERVICE_KEY_ENV, "").strip()
+    if not key:
+        raise RuntimeError(f"{SERVICE_KEY_ENV} が未設定です（サービス経路を使うには必須）")
+    lang_order = lang_order or DEFAULT_LANG_ORDER
+
+    q = urllib.parse.urlencode(
+        {"videoId": video_id, "lang": lang_order[0], "mode": "native"}
+    )
+    try:
+        status, body = _service_get(f"{SERVICE_URL}?{q}", key)
+    except urllib.error.HTTPError as e:
+        if e.code == 206:
+            return None  # transcript-unavailable（字幕なし確定）
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8", "replace")[:200]
+        except Exception:  # noqa: BLE001
+            pass
+        raise RuntimeError(f"transcript service HTTP {e.code}: {detail}") from e
+
+    if status == 206:
+        return None  # 字幕なし
+    if status == 202:
+        # 大きな動画の非同期ジョブ。native モードでは稀。次回リトライに回す。
+        raise RuntimeError("transcript service returned async job (202); retry later")
+
+    content = (body or {}).get("content") or []
+    if not content:
+        return None
+    segments: List[Dict[str, Any]] = []
+    for r in content:
+        text = (r.get("text") or "").strip()
+        if not text:
+            continue
+        segments.append({
+            "start": float(r.get("offset") or 0) / 1000.0,   # ms → 秒
+            "dur": float(r.get("duration") or 0) / 1000.0,   # ms → 秒
+            "text": text,
+        })
+    if not segments:
+        return None
+    lang = ((body or {}).get("lang") or lang_order[0]).split("-")[0]
+    return segments, lang, "auto"
+
+
 def fetch_video_meta(video_id: str, retries: int = 3, retry_base: float = 2.0) -> Dict[str, Any]:
     """タイトル・投稿日など軽量メタを取得（スタンドアロン用）。
 

@@ -107,6 +107,12 @@ python -m pipeline.run collect --branch en --date-after 20240101 --limit 30
   字幕が存在しない動画（`no_subs`）とは区別されます。
 - **cookies 対応**: 環境変数 `HOLOGLISH_COOKIES` にブラウザから書き出した
   Netscape 形式の cookies ファイルパスを渡すと、bot 判定・年齢制限を緩和できます。
+- **字幕取得サービス経路（`--subs-source service`）**: 有償の transcript API（Supadata）経由で
+  字幕を取得します。**YouTube への直接アクセスを業者が肩代わりするため、IPブロック/レート制限の
+  影響を受けず、クラウド（GitHub Actions）でも収集できます**。環境変数 `SUPADATA_API_KEY` が必要
+  （[supadata.ai](https://supadata.ai) で無料100本/月・クレカ不要）。`mode=native`（既存字幕のみ・
+  1本=1クレジット）を使い、高額な AI 生成は使いません。誤課金を防ぐため、この経路は
+  `service` を明示したときだけ動きます。
 - **bot 判定の回避策**（データセンターIP対策）:
   - `--subs-source`（既定 `both`）: 字幕取得経路を `ytdlp` / `api`（youtube-transcript-api・
     別経路の timedtext）/ `both`（yt-dlp→api フォールバック）から選べます。yt-dlp が
