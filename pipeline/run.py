@@ -56,10 +56,16 @@ def _filter_channels(
 def cmd_collect(args: argparse.Namespace) -> int:
     # ライブ収集時のみ yt-dlp を import（オフライン ingest では不要）
     from .fetch_videos import list_channel_videos
-    from .fetch_subtitles import fetch_subtitle, fetch_transcript_api
+    from .fetch_subtitles import (
+        fetch_subtitle, fetch_transcript_api, fetch_transcript_service, service_configured,
+    )
 
     # 字幕の取得経路: ytdlp / api（youtube-transcript-api）/ both（ytdlp→api フォールバック）
+    # / service（有償の字幕取得サービス。IPブロックの影響を受けない。SUPADATA_API_KEY 必須）
     subs_source = getattr(args, "subs_source", "both") or "both"
+    if subs_source == "service" and not service_configured():
+        print("subs-source=service には環境変数 SUPADATA_API_KEY が必要です", file=sys.stderr)
+        return 1
 
     channels = _filter_channels(load_channels(), args.branch, _split(args.members))
     if not channels:
@@ -141,7 +147,17 @@ def cmd_collect(args: argparse.Namespace) -> int:
             src = None            # 実際に成功した取得経路（表示用）
             err: Optional[Exception] = None
 
-            # 経路1: yt-dlp（プローブ→字幕DL）。subs_source が api のときは省略。
+            # 経路0: 有償サービス（subs_source=service のときのみ。誤課金を防ぐため明示制）
+            if subs_source == "service":
+                try:
+                    alt = fetch_transcript_service(vid, lang_order=lang_order)
+                    if alt:
+                        segments, lang, sub_kind = alt
+                        src = "svc"
+                except Exception as e:  # noqa: BLE001
+                    err = e
+
+            # 経路1: yt-dlp（プローブ→字幕DL）。subs_source が api/service のときは省略。
             if subs_source in ("ytdlp", "both"):
                 try:
                     got = fetch_subtitle(
@@ -403,8 +419,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="収集の時間予算（秒）。0で無制限。超過時は区切りよく打ち切る（再開可能）")
     c.add_argument("--tabs", default="videos,streams",
                    help="列挙するチャンネルタブ（カンマ区切り）。既定は動画＋ライブアーカイブ")
-    c.add_argument("--subs-source", choices=["ytdlp", "api", "both"], default="both",
-                   help="字幕取得経路: ytdlp / api(youtube-transcript-api) / both(ytdlp→apiフォールバック)")
+    c.add_argument("--subs-source", choices=["ytdlp", "api", "both", "service"], default="both",
+                   help="字幕取得経路: ytdlp / api(youtube-transcript-api) / both(ytdlp→apiフォールバック) "
+                        "/ service(有償の字幕取得サービス。SUPADATA_API_KEY 必須・IPブロック非依存)")
     c.add_argument("--error-streak", type=int, default=30,
                    help="連続失敗がこの本数に達したら収集を打ち切る（IPブロック検知。0で無効）")
     c.add_argument("--force", action="store_true", help="処理済みも再取得")

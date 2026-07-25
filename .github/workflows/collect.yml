@@ -137,8 +137,10 @@ jobs:
           # ジョブ上限(350分=21000秒)より手前で区切り、必ず公開ステップに到達させる。
           # 収集は再開可能なので、繰り返し実行で未取得分を積み上げる。
           TIME_BUDGET: ${{ inputs.time_budget || '18000' }}
-          # 字幕取得経路（bot判定回避）。both=yt-dlp→api フォールバック。
+          # 字幕取得経路。service=有償の字幕取得サービス（Supadata。IPブロック非依存で
+          # クラウド自動化に最適。Secret SUPADATA_API_KEY が必要）。both=yt-dlp→api。
           SUBS_SOURCE: ${{ inputs.subs_source || 'both' }}
+          SUPADATA_API_KEY: ${{ secrets.SUPADATA_API_KEY }}
           # yt-dlp の innertube クライアント切替（bot判定回避）。空なら pipeline 既定。
           HOLOGLISH_PLAYER_CLIENTS: ${{ inputs.player_clients }}
         run: |
