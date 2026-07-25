@@ -21,6 +21,66 @@ def _args(db_path, **over):
     return argparse.Namespace(**base)
 
 
+def test_error_streak_breaker_stops_early(tmp_path, monkeypatch, capsys):
+    """連続失敗がしきい値に達したら打ち切る（IPブロック中の空振り連打を防ぐ）。"""
+    import pipeline.fetch_videos as fv
+    import pipeline.fetch_subtitles as fs
+    from pipeline import db
+
+    vids = [{"video_id": f"v{i}", "title": f"t{i}", "url": f"u{i}"} for i in range(50)]
+    monkeypatch.setattr(fv, "list_channel_videos", lambda *a, **k: list(vids))
+
+    calls = {"n": 0}
+
+    def _blocked(*a, **k):
+        calls["n"] += 1
+        raise Exception("HTTP Error 429: Too Many Requests")
+
+    monkeypatch.setattr(fs, "fetch_subtitle", _blocked)
+    monkeypatch.setattr(fs, "fetch_transcript_api", _blocked)
+    monkeypatch.setattr(run.time, "sleep", lambda _s: None)
+
+    dbp = str(tmp_path / "breaker.db")
+    rc = run.cmd_collect(_args(dbp, members="Sakura Miko", limit=0, error_streak=5))
+    assert rc == 0
+    # しきい値5で止まる（50本全部は試みない）
+    assert calls["n"] == 10  # ytdlp+api の2経路 × 5本
+    out = capsys.readouterr().out
+    assert "連続 5 本の失敗を検知" in out
+    conn = db.connect(dbp)
+    n_err = conn.execute("SELECT count(*) FROM processed WHERE status='error'").fetchone()[0]
+    conn.close()
+    assert n_err == 5
+
+
+def test_error_streak_resets_on_success(tmp_path, monkeypatch, capsys):
+    """成功を挟むと連続カウントはリセットされ、打ち切られない。"""
+    import pipeline.fetch_videos as fv
+    import pipeline.fetch_subtitles as fs
+
+    vids = [{"video_id": f"v{i}", "title": f"t{i}", "url": f"u{i}"} for i in range(6)]
+    monkeypatch.setattr(fv, "list_channel_videos", lambda *a, **k: list(vids))
+
+    state = {"i": 0}
+
+    def _alternating(*a, **k):
+        state["i"] += 1
+        if state["i"] % 2 == 0:
+            return [{"start": 0.0, "dur": 1.0, "text": "おはよう"}], "ja", "auto"
+        raise Exception("429")
+
+    monkeypatch.setattr(fs, "fetch_subtitle", lambda *a, **k: (_ for _ in ()).throw(Exception("429")))
+    monkeypatch.setattr(fs, "fetch_transcript_api", _alternating)
+    monkeypatch.setattr(run.time, "sleep", lambda _s: None)
+
+    dbp = str(tmp_path / "reset.db")
+    rc = run.cmd_collect(_args(dbp, members="Sakura Miko", limit=0, error_streak=2))
+    assert rc == 0
+    out = capsys.readouterr().out
+    # 交互に成功するため連続2失敗に達せず、完了メッセージで終わる
+    assert "完了" in out
+
+
 def test_time_budget_stops_before_network(tmp_path, monkeypatch, capsys):
     """予算超過時は最初のチャンネル列挙にすら到達せず区切る。"""
     import pipeline.fetch_videos as fv
@@ -69,7 +129,9 @@ def test_deep_reach_advances_over_runs(tmp_path, monkeypatch):
     vids = [{"video_id": f"v{i}", "title": f"t{i}", "url": f"u{i}"} for i in range(5)]
     monkeypatch.setattr(fv, "list_channel_videos", lambda *a, **k: list(vids))
     # 字幕は無し(None)で確定させる（parse 不要。no_subs として処理済みになる）。
+    # フォールバック経路(fetch_transcript_api)も差し替えないと実ネットワークへ出てしまう。
     monkeypatch.setattr(fs, "fetch_subtitle", lambda *a, **k: None)
+    monkeypatch.setattr(fs, "fetch_transcript_api", lambda *a, **k: None)
 
     dbp = str(tmp_path / "reach.db")
 
