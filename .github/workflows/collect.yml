@@ -78,7 +78,7 @@ jobs:
         run: |
           mkdir -p data
           if git fetch origin hologlish-data:hologlish-data 2>/dev/null; then
-            git show hologlish-data:hologlish.db > data/hologlish.db \
+            bash .github/scripts/db_restore.sh hologlish-data data/hologlish.db \
               && echo "既存の索引を復元しました" \
               || echo "索引ファイルが見つからないため新規作成します"
           else
