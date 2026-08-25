@@ -103,7 +103,7 @@ if [ "${PUBLISH_ONLY:-0}" = "1" ]; then
 else
   echo "==> 既存の索引を hologlish-data から復元"
   if git fetch origin hologlish-data 2>/dev/null; then
-    git show origin/hologlish-data:hologlish.db > "$DB" 2>/dev/null \
+    bash .github/scripts/db_restore.sh origin/hologlish-data "$DB" \
       && echo "    既存索引を復元しました" \
       || echo "    索引ファイルが無いため新規作成します"
   else
@@ -135,13 +135,15 @@ python -m pipeline.run coverage --out data/coverage.json || true
 
 echo "==> hologlish-data へ公開"
 pub="$(mktemp -d)"
-cp "$DB" "$pub/hologlish.db"
+# GitHub の 100MB/ファイル制限を回避するため gzip 圧縮を 90MB で分割して公開する
+# （復元は .github/scripts/db_restore.sh）。
+gzip -6 -c "$DB" | split -b 90m - "$pub/hologlish.db.gz.part-"
 [ -f data/coverage.json ] && cp data/coverage.json "$pub/coverage.json" || true
 (
   cd "$pub"
   git init -q
   git checkout -q -b hologlish-data
-  git add hologlish.db
+  git add hologlish.db.gz.part-*
   [ -f coverage.json ] && git add coverage.json || true
   git -c user.name="hololish-local" -c user.email="local@hololish" \
       commit -q -m "索引を更新 (local $(date -u +%Y-%m-%dT%H:%MZ))"

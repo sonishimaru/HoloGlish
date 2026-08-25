@@ -198,8 +198,8 @@ BRANCH=jp bash scripts/collect_local.sh
 収集済み索引を手元やサーバへ取り込むには:
 
 ```bash
-git fetch origin hologlish-data
-git show hologlish-data:hologlish.db > data/hologlish.db
+git fetch origin hologlish-data:hologlish-data
+bash .github/scripts/db_restore.sh hologlish-data data/hologlish.db
 uvicorn server.app:app
 ```
 
