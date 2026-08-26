@@ -3,27 +3,28 @@
 サーバ無しで、ブラウザ内(クライアントサイド)で検索できる静的サイトを生成する。
 GitHub Pages 等にそのまま公開でき、収集した索引を「キャッシュ」として持ち歩ける。
 
-スケーリング & 検索品質:
-  - 全セグメントを1 JSON に載せると全アーカイブで数十MBになるため、動画を
-    N シャードに分割し、各シャードに「メタ・セグメント」を格納する。
-  - **シャードは投稿日の新しい順に詰める**（shard 0 が最新）。既定の並び順
-    （新着順）ではクライアントが shard 0 から順に見るだけでよく、必要件数が
-    埋まった時点で打ち切れる（＝よくある語でも全シャードを取りに行かない）。
-  - 照合は**正規化テキスト**（normalize.py: NFKC・小文字化・空白除去・カナ→かな）で
-    行い、n-gram → 該当シャードのグローバル索引で絞る。
-  - **n-gram 索引はバケット分割して配信する**。全語彙をまとめた 1 ファイルは
-    数十MBに達し、検索前に必ず読む起動コストになるため、gram のハッシュで
-    分割し「クエリに出てくる gram のバケットだけ」を取得する。
-  - シャードごとのメンバー/ブランチ一覧を manifest に持ち、絞り込み検索では
-    そのメンバーを含むシャードだけを取得する。
+設計（索引 version 5）— 「必要な発話だけを取りに行く」:
+  - **n-gram 索引が「どの動画に在るか」まで持つ**。動画を投稿日の新しい順に
+    並べ、MASK_GROUP 本ずつの「グループ」に分ける。索引は
+    gram → [group, mask, group, mask, ...] の平坦配列で、mask はそのグループ内の
+    どの動画にその gram が在るかを示すビット列。
+    動画IDを直接並べるより桁違いに小さく、かつ動画単位まで絞り込める。
+  - **本文は動画単位のファイル**（v/<video_id>.json）。クライアントは索引で
+    絞った候補動画だけを、新しい順に、必要件数が埋まるまで取りに行く。
+    その語を含まない動画はダウンロードしない。
+  - 1文字クエリ用に uni（1-gram）索引も持つため、1文字でも全走査しない。
+  - メンバー/ブランチは manifest の動画別配列で判定するので、絞り込み検索でも
+    候補を先に間引ける。
+  - 照合は**正規化テキスト**（normalize.py: NFKC・小文字化・空白除去・カナ→かな）。
 
 出力構成（out_dir 直下）:
   index.html
   static/{app.js, api.js, style.css, config.js}
-  static/idx/manifest.json      版・シャード数・facets・stats・件数・シャード別メンバー
-  static/idx/tri/<k>.json       3-gram → シャード番号配列（gram ハッシュで分割）
-  static/idx/bi/<k>.json        2-gram → シャード番号配列（同上）
-  static/idx/shard-<b>.json     {vids, meta, segs}
+  static/idx/manifest.json      版・動画一覧(新しい順)・動画別メンバー/ブランチ・facets・stats
+  static/idx/uni/<k>.json       1-gram → [group, mask, ...]
+  static/idx/bi/<k>.json        2-gram → [group, mask, ...]
+  static/idx/tri/<k>.json       3-gram → [group, mask, ...]
+  static/idx/v/<video_id>.json  {meta, segs}
 """
 
 from __future__ import annotations
@@ -41,27 +42,22 @@ WEB_DIR = os.path.join(os.path.dirname(__file__), os.pardir, "web")
 
 _ASSETS = ["app.js", "api.js", "style.css"]
 
-VIDEOS_PER_SHARD = 25
-# シャード数の上限。1シャードが肥大化すると1回の取得が重くなるため、
-# データが増えてもシャードは小さいまま数を増やす（取得は必要な分だけ）。
-MAX_SHARDS = 1024
+# マスク1つが受け持つ動画数。JS のビット演算は 32bit 符号付きなので 30 未満に保つ。
+MASK_GROUP = 24
 
 # n-gram 索引の分割数。1バケット = 全語彙 / この数。
-TRI_BUCKETS = 512
-BI_BUCKETS = 64
+# 検索1回で必ず読むので、実データ(777万発話・異なりトリグラム298万)で
+# 1バケットが 30KB台(gzip) に収まる値にしてある。分割を増やしてもファイル数が
+# 増えるだけで総量は変わらない（取得するのはクエリに出てくる gram のバケットだけ）。
+UNI_BUCKETS = 64
+BI_BUCKETS = 512
+TRI_BUCKETS = 2048
 
-INDEX_VERSION = 4
+INDEX_VERSION = 5
 
 
 def _ngrams(text: str, n: int) -> Set[str]:
     return {text[i : i + n] for i in range(len(text) - n + 1)} if len(text) >= n else set()
-
-
-def _shard_count(num_videos: int) -> int:
-    if num_videos <= 0:
-        return 1
-    n = (num_videos + VIDEOS_PER_SHARD - 1) // VIDEOS_PER_SHARD
-    return max(1, min(MAX_SHARDS, n))
 
 
 def gram_bucket(gram: str, buckets: int) -> int:
@@ -87,7 +83,7 @@ def _ordered_vids(videos: Dict[str, Dict[str, Any]]) -> List[str]:
 
 
 def build_index_files(conn: sqlite3.Connection) -> Dict[str, Any]:
-    """シャード索引一式（manifest / tri_index / bi_index / shards）を返す。"""
+    """索引一式（manifest / uni・bi・tri 索引 / 動画別データ）を返す。"""
     videos: Dict[str, Dict[str, Any]] = {}
     for r in conn.execute(
         "SELECT video_id, member, member_ja, branch, lang, title, url, published_at, sub_kind FROM videos"
@@ -114,66 +110,70 @@ def build_index_files(conn: sqlite3.Connection) -> Dict[str, Any]:
         seg_total += 1
 
     vids = _ordered_vids(videos)
-    n = _shard_count(len(vids))
-    shards: Dict[int, Dict[str, Any]] = {b: {"vids": [], "meta": [], "segs": []} for b in range(n)}
-    tri_index: Dict[str, Set[int]] = {}
-    bi_index: Dict[str, Set[int]] = {}
 
     facets = _search.facets(conn)
     member_ix = {m["value"]: i for i, m in enumerate(facets.get("members", []))}
     branch_ix = {b: i for i, b in enumerate(facets.get("branches", []))}
-    shard_members: List[Set[int]] = [set() for _ in range(n)]
-    shard_branches: List[Set[int]] = [set() for _ in range(n)]
 
-    # 新しい順に VIDEOS_PER_SHARD 本ずつ詰める（shard 0 が最新）。
-    # シャード数が上限に達した場合は残りを最後のシャードへ寄せる。
+    # gram → {group: mask}
+    uni: Dict[str, Dict[int, int]] = {}
+    bi: Dict[str, Dict[int, int]] = {}
+    tri: Dict[str, Dict[int, int]] = {}
+
     for i, vid in enumerate(vids):
-        b = min(i // VIDEOS_PER_SHARD, n - 1)
-        sh = shards[b]
-        meta = videos[vid]
-        sh["vids"].append(vid)
-        sh["meta"].append(meta)
-        seglist = segs_by_video.get(vid, [])
-        sh["segs"].append(seglist)
-        if meta["member"] in member_ix:
-            shard_members[b].add(member_ix[meta["member"]])
-        if meta["branch"] in branch_ix:
-            shard_branches[b].add(branch_ix[meta["branch"]])
-        for seg in seglist:
+        group, bit = i // MASK_GROUP, 1 << (i % MASK_GROUP)
+        g1: Set[str] = set()
+        g2: Set[str] = set()
+        g3: Set[str] = set()
+        for seg in segs_by_video.get(vid, []):
             norm = normalize(seg[2])
-            for g in _ngrams(norm, 3):
-                tri_index.setdefault(g, set()).add(b)
-            for g in _ngrams(norm, 2):
-                bi_index.setdefault(g, set()).add(b)
+            g1 |= set(norm)
+            g2 |= _ngrams(norm, 2)
+            g3 |= _ngrams(norm, 3)
+        for index, grams in ((uni, g1), (bi, g2), (tri, g3)):
+            for g in grams:
+                d = index.get(g)
+                if d is None:
+                    index[g] = {group: bit}
+                else:
+                    d[group] = d.get(group, 0) | bit
+
+    def _flatten(index: Dict[str, Dict[int, int]]) -> Dict[str, List[int]]:
+        # [group, mask, group, mask, ...]（入れ子より JSON が小さい）
+        return {g: [x for grp in sorted(d) for x in (grp, d[grp])] for g, d in index.items()}
 
     manifest = {
         "version": INDEX_VERSION,
-        "shards": n,
         "videos": len(vids),
         "segments": seg_total,
-        # shard 0 が最新。クライアントはこの順に見て、必要件数が揃えば打ち切れる。
-        "order": "date_desc",
-        "tri_buckets": TRI_BUCKETS,
+        "mask_group": MASK_GROUP,
+        "uni_buckets": UNI_BUCKETS,
         "bi_buckets": BI_BUCKETS,
-        # 絞り込み検索でシャードを事前に間引くための索引（facets 内の位置）
-        "shard_members": [sorted(s) for s in shard_members],
-        "shard_branches": [sorted(s) for s in shard_branches],
+        "tri_buckets": TRI_BUCKETS,
+        # 新しい順の動画ID。索引の group/mask はこの並びの位置を指す。
+        "vids": vids,
+        # 絞り込みを索引段階で効かせるための動画別メンバー/ブランチ（facets 内の位置）
+        "vmem": [member_ix.get(videos[v]["member"], -1) for v in vids],
+        "vbr": [branch_ix.get(videos[v]["branch"], -1) for v in vids],
         "facets": facets,
         "stats": _search.stats(conn),
     }
     return {
         "manifest": manifest,
-        "tri_index": {g: sorted(bs) for g, bs in tri_index.items()},
-        "bi_index": {g: sorted(bs) for g, bs in bi_index.items()},
-        "shards": shards,
+        "uni_index": _flatten(uni),
+        "bi_index": _flatten(bi),
+        "tri_index": _flatten(tri),
+        "videos": {
+            vid: {"meta": videos[vid], "segs": segs_by_video.get(vid, [])} for vid in vids
+        },
     }
 
 
 def _split_grams(index: Dict[str, List[int]], buckets: int) -> Dict[int, Dict[str, List[int]]]:
     """gram 索引をハッシュでバケットへ分割する。"""
     out: Dict[int, Dict[str, List[int]]] = {}
-    for gram, shard_ids in index.items():
-        out.setdefault(gram_bucket(gram, buckets), {})[gram] = shard_ids
+    for gram, postings in index.items():
+        out.setdefault(gram_bucket(gram, buckets), {})[gram] = postings
     return out
 
 
@@ -187,7 +187,7 @@ def export_site(conn: sqlite3.Connection, out_dir: str) -> Dict[str, Any]:
         p = os.path.join(idx_dir, f)
         if f.endswith(".json"):
             os.remove(p)
-        elif os.path.isdir(p) and f in ("tri", "bi"):
+        elif os.path.isdir(p) and f in ("uni", "bi", "tri", "v"):
             shutil.rmtree(p)
 
     for name in _ASSETS:
@@ -209,8 +209,9 @@ def export_site(conn: sqlite3.Connection, out_dir: str) -> Dict[str, Any]:
 
     # n-gram 索引はバケット分割して書き出す（検索時に必要なバケットだけ取得する）
     for sub, index, buckets in (
-        ("tri", idx["tri_index"], TRI_BUCKETS),
+        ("uni", idx["uni_index"], UNI_BUCKETS),
         ("bi", idx["bi_index"], BI_BUCKETS),
+        ("tri", idx["tri_index"], TRI_BUCKETS),
     ):
         sub_dir = os.path.join(idx_dir, sub)
         os.makedirs(sub_dir, exist_ok=True)
@@ -218,8 +219,11 @@ def export_site(conn: sqlite3.Connection, out_dir: str) -> Dict[str, Any]:
         for k in range(buckets):
             _dump(os.path.join(sub_dir, f"{k}.json"), parts.get(k, {}))
 
-    for b, shard in idx["shards"].items():
-        _dump(os.path.join(idx_dir, f"shard-{b}.json"), shard)
+    # 本文は動画単位。候補になった動画だけを取得できるようにする。
+    v_dir = os.path.join(idx_dir, "v")
+    os.makedirs(v_dir, exist_ok=True)
+    for vid, payload in idx["videos"].items():
+        _dump(os.path.join(v_dir, f"{vid}.json"), payload)
 
     # 収集状況（ライバー別の完了/未収集）を Pages にも同梱し、安定URLで配信する。
     # （Google スプレッドシートの Apps Script はこの JSON を取得して自動更新する）
@@ -238,5 +242,5 @@ def export_site(conn: sqlite3.Connection, out_dir: str) -> Dict[str, Any]:
         "videos": stats["videos"],
         "segments": stats["segments"],
         "members": stats["members"],
-        "shards": idx["manifest"]["shards"],
+        "shards": idx["manifest"]["videos"],  # 互換: 出力単位の数（動画数）
     }
