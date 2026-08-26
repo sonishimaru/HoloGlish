@@ -69,6 +69,16 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+**JavaScript ランタイム（Deno）を推奨**: 新しめの yt-dlp は YouTube 抽出に JS ランタイムが
+必要です（無いと `No supported JavaScript runtime could be found` の警告が出て抽出が失敗しやすい）。
+**Deno** を入れておくと安定します（yt-dlp が自動検出）。
+
+```bash
+brew install deno              # macOS (Homebrew)
+# もしくは: curl -fsSL https://deno.land/install.sh | sh
+deno --version                 # 確認
+```
+
 ## 使い方
 
 ### 1. 字幕を収集してインデックスを作る（YouTube アクセスが必要）
@@ -86,18 +96,90 @@ python -m pipeline.run collect --branch en --date-after 20240101 --limit 30
 
 - 一度処理した動画は記録され、次回以降スキップされます（**再開可能**）。再取得は `--force`。
 - `--sleep`（既定1秒）で動画間の待機を調整し、YouTube への負荷を抑えます。
+- **レート制限を受けたら（`RequestBlocked` / `too many requests`）**: 住宅IPでも短時間に大量
+  アクセスすると YouTube に一時ブロックされます。**15〜30分ほど待って**から、`--sleep` を上げ
+  （例 `SLEEP=3`）、1回の本数を減らして（例 `LIMIT=20`）ゆっくり回すと回復します。Deno を
+  入れて yt-dlp 本体で取得できるようにすると、フォールバック(transcript-api)への過剰アクセスが
+  減り、レート制限も起きにくくなります。
 - **レート制限（HTTP 429 / bot 確認要求）は一過性エラーとして指数バックオフで自動リトライ**します。
   回数は `--retries`（既定3）、基本待機秒は `--retry-base`（既定2秒）で調整できます。
   リトライしても回復しない動画は `error`（次回実行で再取得対象）として記録し、
   字幕が存在しない動画（`no_subs`）とは区別されます。
 - **cookies 対応**: 環境変数 `HOLOGLISH_COOKIES` にブラウザから書き出した
   Netscape 形式の cookies ファイルパスを渡すと、bot 判定・年齢制限を緩和できます。
+- **字幕取得サービス経路（`--subs-source service`）**: 有償の transcript API（Supadata）経由で
+  字幕を取得します。**YouTube への直接アクセスを業者が肩代わりするため、IPブロック/レート制限の
+  影響を受けず、クラウド（GitHub Actions）でも収集できます**。環境変数 `SUPADATA_API_KEY` が必要
+  （[supadata.ai](https://supadata.ai) で無料100本/月・クレカ不要）。`mode=native`（既存字幕のみ・
+  1本=1クレジット）を使い、高額な AI 生成は使いません。誤課金を防ぐため、この経路は
+  `service` を明示したときだけ動きます。
+- **bot 判定の回避策**（データセンターIP対策）:
+  - `--subs-source`（既定 `both`）: 字幕取得経路を `ytdlp` / `api`（youtube-transcript-api・
+    別経路の timedtext）/ `both`（yt-dlp→api フォールバック）から選べます。yt-dlp が
+    「Sign in to confirm you're not a bot」で弾かれても api 経路なら通ることがあります。
+  - `HOLOGLISH_PLAYER_CLIENTS`（既定 `tv,mweb,web_safari`）: yt-dlp の innertube クライアントを
+    切り替えて bot 判定を回避します。`default` で yt-dlp 既定に戻します。
+  - いずれも根本的にはIPレピュテーション依存です。安定運用は cookies + 住宅IP（プロキシ/
+    セルフホスト）が確実です。
 
-### 自動収集（スケジュール実行）
+### 自宅（住宅IP）で収集する ★推奨
 
-GitHub Actions のワークフロー `.github/workflows/collect.yml` で**定期的に自動収集**します。
+**GitHub のクラウドIPは YouTube に IP レベルでブロックされ、字幕取得ができません**
+（yt-dlp・youtube-transcript-api とも「cloud provider の IP はブロック」と返る）。
+そのため **収集は住宅回線の自分のPCで実行**します。索引はこれまで同様
+`hologlish-data` へ公開され、**スプレッドシート／公開サイトはそのまま更新**されます。
 
-- 既定は**全ブランチ・6時間ごと**。**列挙は全件**（`--list-depth 0`）で過去アーカイブまで見渡し、
+#### かんたん実行（`scripts/collect_local.sh`）
+
+```bash
+# 初回のみ
+git clone https://github.com/sonishimaru/HoloGlish.git && cd HoloGlish
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+# 収集（全メンバー・各30本ずつ → hologlish-data へ公開）
+bash scripts/collect_local.sh
+
+# 例: 本数を増やす / メンバーやブランチで絞る
+LIMIT=50 bash scripts/collect_local.sh
+MEMBERS="Usada Pekora,Sakura Miko" bash scripts/collect_local.sh
+BRANCH=jp bash scripts/collect_local.sh
+```
+
+- 再開可能なので、**繰り返し実行するほど過去アーカイブへ前進**します（全アーカイブは数週間）。
+- 定期化するなら **cron / タスクスケジューラ / launchd** から `scripts/collect_local.sh` を呼びます。
+  例（毎日3時に実行, crontab）: `0 3 * * * cd /path/to/HoloGlish && bash scripts/collect_local.sh`
+- **自宅ネット・ガード**（持ち出しノートPC向け）: `HOME_SSID` に自宅Wi-Fiの名前を設定すると
+  **自宅ネットのときだけ収集**し、職場などでは自動スキップします（社内ネットでの誤実行を防止）。
+  例: `HOME_SSID="MyHomeWiFi" bash scripts/collect_local.sh`。複数はカンマ区切り。`FORCE=1` で無効化。
+- **台帳の全体更新は既定オフ**: 収集(collect)は処理する各チャンネルを全件列挙して台帳も更新するため、
+  前段での全台帳列挙は二度手間で遅くなります。全チャンネルの母集合を最新化したいとき（**月1回程度**）
+  だけ `CATALOG=1 bash scripts/collect_local.sh` で実行します。通常の収集は台帳全体更新を省いて高速。
+- **公開（書き込み）は自動**: `collect_local.sh` は収集が終わると自動で `hologlish-data` へ公開します。
+  途中で `Ctrl+C` しても、それまでに集めた分は `data/hologlish.db` に保存済みです。
+  - **一定時間で区切って自動公開**: `TIME_BUDGET=3600 bash scripts/collect_local.sh`（秒。例は1時間）。
+  - **集めた分だけ今すぐ書き込む**（Ctrl+C の後など、収集せず公開だけ）: `PUBLISH_ONLY=1 bash scripts/collect_local.sh`
+- `HOLOGLISH_COOKIES` にブラウザから書き出した cookies を渡すと年齢制限動画も取得できます（任意）。
+
+#### 完全自動化: セルフホストrunner（任意）
+
+自宅マシンを **GitHub Actions のセルフホストrunner** として登録すると、`collect.yml` を
+自宅IPで自動実行できます（クラウドの弱点を回避しつつ自動化）。
+
+1. リポジトリ Settings → Actions → Runners → **New self-hosted runner** の手順で自宅PCに登録。
+2. `collect.yml` の `runs-on: ubuntu-latest` を **`self-hosted`** に変更し、冒頭の
+   `schedule:` cron のコメントを外す。
+3. **セキュリティ（public リポジトリ必須）**: Settings → Actions → General →
+   **Fork pull request workflows** を無効化（第三者PRが自宅runnerでコードを実行するのを防ぐ）。
+
+> クラウドの `schedule` は無効化済みです（IPブロックで空振りするため）。手動の
+> `workflow_dispatch` は残していますが、クラウドでは収集は通りません。
+
+### （参考）GitHub Actions のワークフロー構成
+
+`.github/workflows/collect.yml` は次の設計です（セルフホストrunner で使う場合に有効）。
+
+- **列挙は全件**（`--list-depth 0`）で過去アーカイブまで見渡し、
   **1実行では各チャンネル最大30本の新規**（`--limit 30`）を新しい側から処理します。処理済みは
   スキップして次の実行でさらに古い方へ前進するため、**繰り返し実行で全アーカイブに到達**します。
   実行ごとにチャンネル順をシャッフルし、特定チャンネルに偏らず均等に進めます。
@@ -109,15 +191,15 @@ GitHub Actions のワークフロー `.github/workflows/collect.yml` で**定期
 - 手動実行（`workflow_dispatch`）では対象ブランチ・メンバー・本数・列挙深さ・待機秒・時間予算を指定できます。
 - 生成した索引 `hologlish.db` は専用ブランチ **`hologlish-data`** に蓄積されます
   （毎回、前回分を復元してから追記するため**再開可能**）。`main` は汚しません。
-- **重要**: GitHub ランナーの IP は YouTube に bot 判定されやすいため、安定運用には
-  リポジトリ Secret **`YT_COOKIES`**（Netscape 形式 cookies の中身）の設定を推奨します。
-  未設定でも動きますが、一部の動画が 429 / サインイン要求で失敗しえます。
+- **クラウド実行の注意**: GitHub のクラウドIPは YouTube に**IPレベルでブロック**され、
+  字幕取得が通りません（cookies でも回避不可）。**収集は住宅IP**（上記のローカル実行／
+  セルフホストrunner）で行ってください。`YT_COOKIES` は年齢制限動画の対策として有効です。
 
 収集済み索引を手元やサーバへ取り込むには:
 
 ```bash
-git fetch origin hologlish-data
-git show hologlish-data:hologlish.db > data/hologlish.db
+git fetch origin hologlish-data:hologlish-data
+bash .github/scripts/db_restore.sh hologlish-data data/hologlish.db
 uvicorn server.app:app
 ```
 

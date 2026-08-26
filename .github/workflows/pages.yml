@@ -50,8 +50,7 @@ jobs:
         run: |
           mkdir -p data
           if git fetch origin hologlish-data:hologlish-data 2>/dev/null \
-             && git show hologlish-data:hologlish.db > data/hologlish.db 2>/dev/null \
-             && [ -s data/hologlish.db ]; then
+             && bash .github/scripts/db_restore.sh hologlish-data data/hologlish.db; then
             echo "収集済み索引 (hologlish-data) を使用します"
           else
             echo "索引が無いためフィクスチャで生成します"

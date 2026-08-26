@@ -56,7 +56,16 @@ def _filter_channels(
 def cmd_collect(args: argparse.Namespace) -> int:
     # ライブ収集時のみ yt-dlp を import（オフライン ingest では不要）
     from .fetch_videos import list_channel_videos
-    from .fetch_subtitles import fetch_subtitle
+    from .fetch_subtitles import (
+        fetch_subtitle, fetch_transcript_api, fetch_transcript_service, service_configured,
+    )
+
+    # 字幕の取得経路: ytdlp / api（youtube-transcript-api）/ both（ytdlp→api フォールバック）
+    # / service（有償の字幕取得サービス。IPブロックの影響を受けない。SUPADATA_API_KEY 必須）
+    subs_source = getattr(args, "subs_source", "both") or "both"
+    if subs_source == "service" and not service_configured():
+        print("subs-source=service には環境変数 SUPADATA_API_KEY が必要です", file=sys.stderr)
+        return 1
 
     channels = _filter_channels(load_channels(), args.branch, _split(args.members))
     if not channels:
@@ -85,6 +94,13 @@ def cmd_collect(args: argparse.Namespace) -> int:
 
     def _over_budget() -> bool:
         return deadline is not None and time.monotonic() >= deadline
+
+    # 連続失敗ブレーカー。IPブロック/レート制限中に回すと全てが error になり、
+    # 空振りのアクセスがブロックを延長してしまう。連続 N 本失敗したら「ブロック中」
+    # とみなして収集を即打ち切り、公開へ進む（0 で無効）。
+    streak_limit = getattr(args, "error_streak", 30) or 0
+    error_streak = 0
+    tripped = False
 
     stopped = False
     for ch in channels:
@@ -125,18 +141,48 @@ def cmd_collect(args: argparse.Namespace) -> int:
                 break  # このチャンネルの1回分の上限に達した（次回さらに奥へ続行）
             new_count += 1
             new_total += 1
-            try:
-                got = fetch_subtitle(
-                    vid, args.raw_dir, lang_order=lang_order,
-                    retries=args.retries, retry_base=args.retry_base,
-                )
-                if not got:
-                    db.mark_processed(conn, vid, "no_subs", _now())
-                    conn.commit()
-                    continue
-                # メタはプローブ結果から取得済み（追加の抽出をしない）
-                sub_path, lang, sub_kind, meta = got
-                segments = parse_subtitle_file(sub_path)
+            segments = None
+            lang = sub_kind = None
+            meta: Dict[str, Any] = {}
+            src = None            # 実際に成功した取得経路（表示用）
+            err: Optional[Exception] = None
+
+            # 経路0: 有償サービス（subs_source=service のときのみ。誤課金を防ぐため明示制）
+            if subs_source == "service":
+                try:
+                    alt = fetch_transcript_service(vid, lang_order=lang_order)
+                    if alt:
+                        segments, lang, sub_kind = alt
+                        src = "svc"
+                except Exception as e:  # noqa: BLE001
+                    err = e
+
+            # 経路1: yt-dlp（プローブ→字幕DL）。subs_source が api/service のときは省略。
+            if subs_source in ("ytdlp", "both"):
+                try:
+                    got = fetch_subtitle(
+                        vid, args.raw_dir, lang_order=lang_order,
+                        retries=args.retries, retry_base=args.retry_base,
+                    )
+                    if got:
+                        sub_path, lang, sub_kind, meta = got
+                        segments = parse_subtitle_file(sub_path)
+                        src = "ytdlp"
+                except Exception as e:  # noqa: BLE001
+                    err = e  # bot 判定等 → フォールバックを試す
+
+            # 経路2: youtube-transcript-api（別経路）。ytdlp が空/失敗のとき試す。
+            if segments is None and subs_source in ("api", "both"):
+                try:
+                    alt = fetch_transcript_api(vid, lang_order=lang_order)
+                    if alt:
+                        segments, lang, sub_kind = alt
+                        src = "api"
+                        err = None
+                except Exception as e:  # noqa: BLE001
+                    err = err or e
+
+            if segments is not None:
                 build_index.upsert_video(
                     conn,
                     {
@@ -155,16 +201,31 @@ def cmd_collect(args: argparse.Namespace) -> int:
                 db.mark_processed(conn, vid, "done", _now())
                 conn.commit()
                 total_segments += n
-                print(f"  + {vid} [{lang}/{sub_kind}] {n} segments")
-            except Exception as e:  # noqa: BLE001
+                error_streak = 0
+                print(f"  + {vid} [{lang}/{sub_kind}/{src}] {n} segments")
+            elif err is not None:
                 db.mark_processed(conn, vid, "error", _now())
                 conn.commit()
-                print(f"  ! {vid} 失敗: {e}", file=sys.stderr)
+                error_streak += 1
+                print(f"  ! {vid} 失敗: {err}", file=sys.stderr)
+                if streak_limit and error_streak >= streak_limit:
+                    tripped = True
+                    stopped = True
+                    break
+            else:
+                db.mark_processed(conn, vid, "no_subs", _now())
+                conn.commit()
+                error_streak = 0
             time.sleep(args.sleep)  # レート制限（YouTube への配慮）
         if stopped:
             break
 
-    if stopped:
+    if tripped:
+        print(f"連続 {error_streak} 本の失敗を検知したため収集を打ち切りました。"
+              f"IPブロック/レート制限中の可能性が高いです。しばらく（数時間〜1日）待つか、"
+              f"ルーター再起動でIPを変えてから再開してください（error は次回リトライされます）: "
+              f"新規 {new_total} 本 / 合計 {total_segments} セグメントを追加/更新")
+    elif stopped:
         print(f"時間予算({int(budget)}秒)に達したため区切りました（次回続行）: "
               f"新規 {new_total} 本 / 合計 {total_segments} セグメントを追加/更新")
     else:
@@ -358,6 +419,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="収集の時間予算（秒）。0で無制限。超過時は区切りよく打ち切る（再開可能）")
     c.add_argument("--tabs", default="videos,streams",
                    help="列挙するチャンネルタブ（カンマ区切り）。既定は動画＋ライブアーカイブ")
+    c.add_argument("--subs-source", choices=["ytdlp", "api", "both", "service"], default="both",
+                   help="字幕取得経路: ytdlp / api(youtube-transcript-api) / both(ytdlp→apiフォールバック) "
+                        "/ service(有償の字幕取得サービス。SUPADATA_API_KEY 必須・IPブロック非依存)")
+    c.add_argument("--error-streak", type=int, default=30,
+                   help="連続失敗がこの本数に達したら収集を打ち切る（IPブロック検知。0で無効）")
     c.add_argument("--force", action="store_true", help="処理済みも再取得")
     c.set_defaults(func=cmd_collect)
 

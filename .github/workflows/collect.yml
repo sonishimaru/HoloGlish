@@ -1,19 +1,17 @@
 name: Scheduled Collect
 
-# HoloGlish の字幕を定期的に自動収集し、生成した索引(DB)を専用ブランチ
-# `hologlish-data` に蓄積する。main の作業ツリーは汚さない。
-# （このワークフローを GitHub に確実に登録・有効化するための再登録済み）
+# HoloGlish の字幕を収集し、生成した索引(DB)を専用ブランチ `hologlish-data`
+# に蓄積する。main の作業ツリーは汚さない。
 #
-# 注意: GitHub ランナーの IP は YouTube に bot 判定されやすい。安定運用には
-# リポジトリ Secret `YT_COOKIES`（ブラウザから書き出した Netscape 形式 cookies）
-# を設定すると緩和できる。未設定でも動くが 429 / Sign-in 要求で一部失敗しうる。
+# 字幕取得は Supadata サービス経路（--subs-source service）が既定。
+# IPブロックに依存しないためクラウドの定期スケジュールで完全自動化できる
+# （Secret SUPADATA_API_KEY が必要。有料プラン契約済み）。
+# yt-dlp / youtube-transcript-api 経路は GitHub のクラウドIPが YouTube に
+# ブロックされるため使えない（住宅IPでの手動実行時のみ有効）。
 
 on:
+  # Supadata サービス経路で 6 時間ごとに自動収集する。
   schedule:
-    # 6時間ごと。1実行あたり各チャンネル最大 limit 本を収集し、確実に公開する。
-    # 全アーカイブは繰り返し実行（再開可能）で未取得分を積み上げて到達する。
-    # ※上限なしにするとジョブがタイムアウトし、末尾の公開ステップが走らず
-    #   その実行の収集分が失われるため、必ず1実行を区切る設計にしている。
     - cron: "0 */6 * * *"
   workflow_dispatch:
     inputs:
@@ -41,6 +39,14 @@ on:
         description: "収集の時間予算（秒）。ジョブ上限より手前で区切り公開に到達させる（既定18000=5時間）"
         required: false
         default: "18000"
+      subs_source:
+        description: "字幕取得経路 service/ytdlp/api/both（既定service=Supadata。IPブロック非依存）"
+        required: false
+        default: "service"
+      player_clients:
+        description: "yt-dlp の innertube クライアント（カンマ区切り）。default で既定。bot判定回避用"
+        required: false
+        default: ""
 
 # 索引を hologlish-data ブランチへ push するために書き込み権限が必要
 permissions:
@@ -72,7 +78,7 @@ jobs:
         run: |
           mkdir -p data
           if git fetch origin hologlish-data:hologlish-data 2>/dev/null; then
-            git show hologlish-data:hologlish.db > data/hologlish.db \
+            bash .github/scripts/db_restore.sh hologlish-data data/hologlish.db \
               && echo "既存の索引を復元しました" \
               || echo "索引ファイルが見つからないため新規作成します"
           else
@@ -128,11 +134,19 @@ jobs:
           # ジョブ上限(350分=21000秒)より手前で区切り、必ず公開ステップに到達させる。
           # 収集は再開可能なので、繰り返し実行で未取得分を積み上げる。
           TIME_BUDGET: ${{ inputs.time_budget || '18000' }}
+          # 字幕取得経路。service=有償の字幕取得サービス（Supadata。IPブロック非依存で
+          # クラウド自動化に最適。Secret SUPADATA_API_KEY が必要）。schedule 実行時は
+          # inputs が空のためこのフォールバック（service）が使われる。
+          SUBS_SOURCE: ${{ inputs.subs_source || 'service' }}
+          SUPADATA_API_KEY: ${{ secrets.SUPADATA_API_KEY }}
+          # yt-dlp の innertube クライアント切替（bot判定回避）。空なら pipeline 既定。
+          HOLOGLISH_PLAYER_CLIENTS: ${{ inputs.player_clients }}
         run: |
           python -m pipeline.run collect \
             ${BRANCH:+--branch "$BRANCH"} \
             ${MEMBERS:+--members "$MEMBERS"} \
             --limit "$LIMIT" --list-depth "$LIST_DEPTH" --time-budget "$TIME_BUDGET" \
+            --subs-source "$SUBS_SOURCE" \
             --sleep "$SLEEP" --retries 4 --retry-base 5
 
       # 収集分を反映して coverage.json を作り直す

@@ -121,6 +121,166 @@ def fetch_subtitle(
     return candidates[0], lang.split("-")[0], sub_kind, meta
 
 
+# youtube-transcript-api で「字幕が無い/取得対象外」とみなす例外クラス名。
+# これらは None（no_subs 相当）で返す。RequestBlocked / IpBlocked / HTTPError 等の
+# 一過性ブロックは含めず、例外を送出して呼び出し側で 'error'（次回再取得）にする。
+_NO_TRANSCRIPT = {
+    "TranscriptsDisabled", "NoTranscriptFound", "NoTranscriptAvailable",
+    "VideoUnavailable", "VideoUnplayable", "InvalidVideoId",
+    "TranslationLanguageNotAvailable", "NotTranslatable", "AgeRestricted",
+}
+
+
+def _transcript_lister():
+    """youtube-transcript-api の list 呼び出しを返す（1.x=インスタンス / 0.6=クラス）。"""
+    from youtube_transcript_api import YouTubeTranscriptApi
+    try:
+        inst = YouTubeTranscriptApi()          # 1.x はインスタンス API
+        if hasattr(inst, "list"):
+            return inst.list
+    except Exception:  # noqa: BLE001
+        pass
+    return YouTubeTranscriptApi.list_transcripts  # 0.6 系
+
+
+def fetch_transcript_api(
+    video_id: str, lang_order: Optional[List[str]] = None,
+) -> Optional[Tuple[List[Dict[str, Any]], str, str]]:
+    """youtube-transcript-api でトランスクリプトを取得する（yt-dlp とは別経路）。
+
+    yt-dlp のプレイヤー取得が bot 判定で弾かれる状況でも、timedtext ベースの
+    この経路なら通ることがある（データセンターIP対策の一手）。
+
+    戻り値: (segments, lang, sub_kind) / 字幕が無ければ None。
+      segments は [{"start","dur","text"}]。sub_kind は 'manual'/'auto'。
+    ブロック等の一過性エラーは例外を送出し、呼び出し側で 'error' として記録する。
+    """
+    lang_order = lang_order or DEFAULT_LANG_ORDER
+    try:
+        lister = _transcript_lister()
+    except ImportError:
+        return None
+
+    try:
+        tlist = lister(video_id)
+    except Exception as e:  # noqa: BLE001
+        if type(e).__name__ in _NO_TRANSCRIPT:
+            return None
+        raise  # ブロック等 → 呼び出し側で error（次回再取得）
+
+    def _pick(generated: bool):
+        for want in lang_order:
+            for t in tlist:
+                code = getattr(t, "language_code", "")
+                if bool(getattr(t, "is_generated", False)) == generated and (
+                    code == want or code.split("-")[0] == want
+                ):
+                    return t
+        return None
+
+    tr = _pick(False) or _pick(True)  # 手動字幕を優先、無ければ自動生成
+    if tr is None:
+        return None
+
+    try:
+        rows = tr.fetch()
+    except Exception as e:  # noqa: BLE001
+        if type(e).__name__ in _NO_TRANSCRIPT:
+            return None
+        raise
+
+    segments: List[Dict[str, Any]] = []
+    for r in rows:
+        # 0.6系は dict、1.x系はオブジェクト属性の両対応
+        text = r.get("text") if isinstance(r, dict) else getattr(r, "text", "")
+        start = r.get("start") if isinstance(r, dict) else getattr(r, "start", 0.0)
+        dur = r.get("duration") if isinstance(r, dict) else getattr(r, "duration", 0.0)
+        if text:
+            segments.append({"start": float(start or 0.0), "dur": float(dur or 0.0), "text": text})
+    if not segments:
+        return None
+    kind = "auto" if getattr(tr, "is_generated", False) else "manual"
+    return segments, getattr(tr, "language_code", lang_order[0]).split("-")[0], kind
+
+
+# ---- 有償の字幕取得サービス経路（Supadata） ----------------------------------
+# YouTube への直接アクセスを業者が肩代わりするため、IPブロック/レート制限の影響を
+# 受けない（クラウド自動化に最適）。mode=native（既存字幕のみ・1本=1クレジット）を
+# 使い、高額な AI 生成（2クレジット/分）は使わない。
+SERVICE_KEY_ENV = "SUPADATA_API_KEY"
+SERVICE_URL = "https://api.supadata.ai/v1/youtube/transcript"
+
+
+def _service_get(url: str, key: str, timeout: float = 60.0):
+    """HTTP GET → (status, parsed_json)。テストで差し替えやすいよう分離。"""
+    import json as _json
+    import urllib.request
+
+    req = urllib.request.Request(url, headers={"x-api-key": key})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.status, _json.loads(r.read().decode("utf-8"))
+
+
+def service_configured() -> bool:
+    return bool(os.environ.get(SERVICE_KEY_ENV, "").strip())
+
+
+def fetch_transcript_service(
+    video_id: str, lang_order: Optional[List[str]] = None,
+) -> Optional[Tuple[List[Dict[str, Any]], str, str]]:
+    """Supadata transcript API で字幕を取得する（サービス経路）。
+
+    戻り値: (segments, lang, sub_kind) / 字幕が無ければ None（= no_subs）。
+    認証エラー・クォータ超過・その他の失敗は例外を送出（= error、次回リトライ）。
+    """
+    import urllib.error
+    import urllib.parse
+
+    key = os.environ.get(SERVICE_KEY_ENV, "").strip()
+    if not key:
+        raise RuntimeError(f"{SERVICE_KEY_ENV} が未設定です（サービス経路を使うには必須）")
+    lang_order = lang_order or DEFAULT_LANG_ORDER
+
+    q = urllib.parse.urlencode(
+        {"videoId": video_id, "lang": lang_order[0], "mode": "native"}
+    )
+    try:
+        status, body = _service_get(f"{SERVICE_URL}?{q}", key)
+    except urllib.error.HTTPError as e:
+        if e.code == 206:
+            return None  # transcript-unavailable（字幕なし確定）
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8", "replace")[:200]
+        except Exception:  # noqa: BLE001
+            pass
+        raise RuntimeError(f"transcript service HTTP {e.code}: {detail}") from e
+
+    if status == 206:
+        return None  # 字幕なし
+    if status == 202:
+        # 大きな動画の非同期ジョブ。native モードでは稀。次回リトライに回す。
+        raise RuntimeError("transcript service returned async job (202); retry later")
+
+    content = (body or {}).get("content") or []
+    if not content:
+        return None
+    segments: List[Dict[str, Any]] = []
+    for r in content:
+        text = (r.get("text") or "").strip()
+        if not text:
+            continue
+        segments.append({
+            "start": float(r.get("offset") or 0) / 1000.0,   # ms → 秒
+            "dur": float(r.get("duration") or 0) / 1000.0,   # ms → 秒
+            "text": text,
+        })
+    if not segments:
+        return None
+    lang = ((body or {}).get("lang") or lang_order[0]).split("-")[0]
+    return segments, lang, "auto"
+
+
 def fetch_video_meta(video_id: str, retries: int = 3, retry_base: float = 2.0) -> Dict[str, Any]:
     """タイトル・投稿日など軽量メタを取得（スタンドアロン用）。
 
