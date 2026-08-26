@@ -254,6 +254,12 @@ def fetch_transcript_service(
             detail = e.read().decode("utf-8", "replace")[:200]
         except Exception:  # noqa: BLE001
             pass
+        # 403 forbidden = メンバー限定動画など、恒久的に取得できない動画。
+        # error（毎回リトライ）にするとメン限が連続するチャンネルで連続失敗
+        # ブレーカーが誤作動して収集が早期終了するため、no_subs（確定スキップ）
+        # として扱う。認証エラー(401)はここに該当せず従来どおり error。
+        if e.code == 403 and '"forbidden"' in detail:
+            return None
         raise RuntimeError(f"transcript service HTTP {e.code}: {detail}") from e
 
     if status == 206:

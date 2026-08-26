@@ -61,6 +61,29 @@ def test_service_http_error_raises(monkeypatch):
         fs.fetch_transcript_service("vid")
 
 
+def test_service_403_forbidden_means_no_subs(monkeypatch):
+    # メンバー限定動画の 403 は恒久的に取得不能 → no_subs（確定スキップ）。
+    # error にするとメン限が連続するチャンネルで連続失敗ブレーカーが誤作動する。
+    import io
+    monkeypatch.setenv(fs.SERVICE_KEY_ENV, "k")
+    body = (b'{"error":"forbidden","message":"Forbidden",'
+            b'"details":"This video requires channel membership to access."}')
+    def _get(url, key, timeout=60.0):
+        raise urllib.error.HTTPError(url, 403, "forbidden", None, io.BytesIO(body))
+    monkeypatch.setattr(fs, "_service_get", _get)
+    assert fs.fetch_transcript_service("vid") is None
+
+
+def test_service_403_without_forbidden_body_raises(monkeypatch):
+    # 403 でも本文が読めない/想定外なら従来どおり error（安全側）。
+    monkeypatch.setenv(fs.SERVICE_KEY_ENV, "k")
+    def _get(url, key, timeout=60.0):
+        raise urllib.error.HTTPError(url, 403, "forbidden", None, None)
+    monkeypatch.setattr(fs, "_service_get", _get)
+    with pytest.raises(RuntimeError, match="403"):
+        fs.fetch_transcript_service("vid")
+
+
 def test_service_missing_key_raises(monkeypatch):
     monkeypatch.delenv(fs.SERVICE_KEY_ENV, raising=False)
     with pytest.raises(RuntimeError, match="SUPADATA_API_KEY"):
