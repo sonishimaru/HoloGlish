@@ -232,10 +232,14 @@ const Api = (function () {
       scanned += batch.length;
       // 新着順: 新しいシャードから順に見ているので、必要件数が揃えば確定。
       // 一致度順: 十分な候補が集まったら、そこから順位付けする。
-      const enough = byDate ? hits.length >= needed
-                            : hits.length >= Math.max(needed, RELEVANCE_MIN_POOL);
-      if (enough) break;
-      size = Math.min(size * 2, SHARD_BATCH_MAX);
+      const want = byDate ? needed : Math.max(needed, RELEVANCE_MIN_POOL);
+      if (hits.length >= want) break;
+      // 次に取る数は、ここまでの「1シャードあたりの命中数」から見積もる。
+      // 倍々だと、あと1シャードで足りる場合でも取りすぎてしまう。
+      // まだ0件のうちは手掛かりが無いので倍々で広げる。
+      size = hits.length > 0
+        ? Math.min(Math.max(Math.ceil((want - hits.length) / (hits.length / scanned)), 1), SHARD_BATCH_MAX)
+        : Math.min(size * 2, SHARD_BATCH_MAX);
     }
     return { hits, partial: scanned < buckets.length };
   }
