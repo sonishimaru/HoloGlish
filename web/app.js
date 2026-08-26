@@ -10,6 +10,7 @@ const state = {
   page: 1,
   pageSize: 20,
   total: 0,
+  partial: false, // 打ち切って返した（total は下限）
   query: "",
   sort: "date",
   speed: 1,
@@ -230,7 +231,7 @@ function renderNowPlaying(r) {
     `<span class="tag">${escapeHtml(r.lang || "")}</span>`;
   $("now-title").textContent = r.title || "";
   $("now-caption").innerHTML = highlight(r.text || "", state.query);
-  $("counter").textContent = `${state.index + 1} / ${state.results.length}（全 ${state.total} 件）`;
+  $("counter").textContent = `${state.index + 1} / ${state.results.length}（全 ${totalLabel()}）`;
   $("prev-btn").disabled = state.index <= 0;
 }
 
@@ -258,9 +259,16 @@ async function loadContext(r) {
   } catch (_) { /* 文脈は補助情報なので失敗しても本体は動く */ }
 }
 
+// 打ち切って返した場合、total は下限なので「N+ 件」と表す
+function totalLabel() {
+  return `${state.total}${state.partial ? "+" : ""} 件`;
+}
+
 function renderPager() {
   const pager = $("pager");
-  const pages = Math.ceil(state.total / state.pageSize) || 1;
+  const known = Math.ceil(state.total / state.pageSize) || 1;
+  // 打ち切った場合はこの先にも一致があり得るので、次ページへ進めるようにする
+  const pages = state.partial ? Math.max(known, state.page + 1) : known;
   pager.innerHTML = "";
   if (state.total === 0) return;
   const prev = document.createElement("button");
@@ -268,7 +276,7 @@ function renderPager() {
   prev.disabled = state.page <= 1;
   prev.onclick = () => loadPage(state.page - 1);
   const info = document.createElement("span");
-  info.textContent = ` ${state.page} / ${pages} `;
+  info.textContent = ` ${state.page} / ${pages}${state.partial ? "+" : ""} `;
   info.style.alignSelf = "center";
   const next = document.createElement("button");
   next.textContent = "次のページ →";
@@ -328,11 +336,12 @@ async function loadPage(page, playFirst = false) {
 
   state.results = data.results || [];
   state.total = data.total || 0;
+  state.partial = !!data.partial;
   state.page = data.page || page;
   state.index = -1;
 
   $("status").textContent = state.total
-    ? `「${state.query}」の用例: ${state.total} 件`
+    ? `「${state.query}」の用例: ${totalLabel()}`
     : `「${state.query}」は見つかりませんでした`;
 
   renderResults();
