@@ -46,10 +46,12 @@ _ASSETS = ["app.js", "api.js", "style.css"]
 MASK_GROUP = 24
 
 # n-gram 索引の分割数。1バケット = 全語彙 / この数。
-# 実データ(777万発話・異なりトリグラム298万)で 1 バケット ≒ 190KB(gzip) になる値。
-UNI_BUCKETS = 8
-BI_BUCKETS = 128
-TRI_BUCKETS = 1024
+# 検索1回で必ず読むので、実データ(777万発話・異なりトリグラム298万)で
+# 1バケットが 30KB台(gzip) に収まる値にしてある。分割を増やしてもファイル数が
+# 増えるだけで総量は変わらない（取得するのはクエリに出てくる gram のバケットだけ）。
+UNI_BUCKETS = 64
+BI_BUCKETS = 512
+TRI_BUCKETS = 2048
 
 INDEX_VERSION = 5
 
