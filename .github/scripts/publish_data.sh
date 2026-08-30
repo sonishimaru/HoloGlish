@@ -44,9 +44,33 @@ git init -q
 git config user.name "github-actions[bot]"
 git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 git checkout -q -b hologlish-data
-git add hologlish.db.gz.part-* README.md
+git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+# 【重要】全パートを1コミット・1pushで送ると、pack が 1GB を超えたあたりで
+# GitHub 側が HTTP 500 で切断し公開に失敗する（2026-08-28〜29 に6ラン連続で
+# 発生し、各ランの収集結果を失った）。そこでパートを1つずつ commit/push して
+# オブジェクトを ~90MB ずつサーバへ積み上げ（staging ブランチ宛）、最後に
+# 本ブランチ hologlish-data へ原子的に切り替える。切り替え push は転送済み
+# オブジェクトを指すだけなので一瞬で終わり、読者が「パートが揃っていない
+# 途中状態」を見ることもない。
+staging="refs/heads/hologlish-data-staging"
+first=1
+for p in hologlish.db.gz.part-*; do
+  git add "$p"
+  git commit -q -m "stage $p"
+  if [ "$first" = 1 ]; then
+    git push -q -f origin "HEAD:$staging"   # 前回の残骸があってもリセット
+    first=0
+  else
+    git push -q origin "HEAD:$staging"
+  fi
+  echo "  staged: $p"
+done
+git add README.md
 [ -f coverage.json ] && git add coverage.json || true
 git commit -q -m "索引を更新 ($(date -u +%Y-%m-%dT%H:%MZ))"
-git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-git push -q -f origin hologlish-data
+git push -q origin "HEAD:$staging"
+# 原子的スワップ（オブジェクトは既にサーバへ転送済み）
+git push -q -f origin "HEAD:refs/heads/hologlish-data"
+git push -q origin ":$staging" || true   # 後片付け（失敗しても無害）
 echo "hologlish-data ブランチへ公開しました"

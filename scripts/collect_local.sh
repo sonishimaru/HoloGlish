@@ -142,13 +142,30 @@ gzip -6 -c "$DB" | split -b 90m - "$pub/hologlish.db.gz.part-"
 (
   cd "$pub"
   git init -q
+  git config user.name "hololish-local"
+  git config user.email "local@hololish"
   git checkout -q -b hologlish-data
-  git add hologlish.db.gz.part-*
-  [ -f coverage.json ] && git add coverage.json || true
-  git -c user.name="hololish-local" -c user.email="local@hololish" \
-      commit -q -m "索引を更新 (local $(date -u +%Y-%m-%dT%H:%MZ))"
   git remote add origin "$ORIGIN_URL"
-  git push -q -f origin hologlish-data
+  # 大きな一括pushは GitHub が HTTP 500 で切断するため、パートを1つずつ
+  # staging へ push し、最後に本ブランチへ原子的に切り替える
+  # （publish_data.sh と同じ方式）。
+  staging="refs/heads/hologlish-data-staging"
+  first=1
+  for p in hologlish.db.gz.part-*; do
+    git add "$p"
+    git commit -q -m "stage $p"
+    if [ "$first" = 1 ]; then
+      git push -q -f origin "HEAD:$staging"
+      first=0
+    else
+      git push -q origin "HEAD:$staging"
+    fi
+  done
+  [ -f coverage.json ] && git add coverage.json || true
+  git commit -q --allow-empty -m "索引を更新 (local $(date -u +%Y-%m-%dT%H:%MZ))"
+  git push -q origin "HEAD:$staging"
+  git push -q -f origin "HEAD:refs/heads/hologlish-data"
+  git push -q origin ":$staging" || true
 )
 rm -rf "$pub"
 echo "==> 完了: hologlish-data へ公開しました（スプレッドシート／公開サイトに反映されます）"
