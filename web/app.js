@@ -23,6 +23,7 @@ const state = {
   pollTimer: null,
   ctxToken: 0,
   pendingClip: null, // 共有リンクで指定された用例 {v, t}
+  searchToken: 0,    // 検索の世代。古い検索の結果・進捗を捨てるのに使う
 };
 
 const $ = (id) => document.getElementById(id);
@@ -196,6 +197,41 @@ function fmtTime(sec) {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+// ---------- 検索中の見せ方 ----------
+// 静的モードの検索は索引と本文を都度ダウンロードするので、回線によっては数秒かかる。
+// 何も起きていないように見せないため、行の骨組みと取得の進み具合を出す。
+const SKELETON_ROWS = 6;
+
+function renderSkeleton(n = SKELETON_ROWS) {
+  const ul = $("results");
+  ul.innerHTML = "";
+  for (let i = 0; i < n; i++) {
+    const li = document.createElement("li");
+    li.className = "result skeleton";
+    li.setAttribute("aria-hidden", "true");
+    li.innerHTML =
+      '<div class="time"><span class="sk sk-time"></span></div>' +
+      '<div class="body"><div class="who"><span class="sk sk-who"></span></div>' +
+      '<div class="snippet"><span class="sk sk-line"></span>' +
+      '<span class="sk sk-line short"></span></div></div>';
+    ul.appendChild(li);
+  }
+}
+
+function setSearching(on) {
+  $("search-btn").disabled = on;
+  $("results").setAttribute("aria-busy", on ? "true" : "false");
+}
+
+// 進捗の文言。候補動画の総数が分かっているので「あと何本か」が伝わる。
+function progressLabel(p) {
+  if (!p || p.phase === "index") return "索引を読み込み中…";
+  if (!p.candidates) return "検索中…";
+  const seen = Math.min(p.scanned, p.candidates);
+  return `候補 ${p.candidates.toLocaleString()} 本を新しい順に確認中… ` +
+    `${seen.toLocaleString()} 本目・用例 ${p.hits.toLocaleString()} 件`;
+}
+
 function renderResults() {
   const ul = $("results");
   ul.innerHTML = "";
@@ -328,11 +364,32 @@ async function loadPage(page, playFirst = false) {
 
   writeHash();
   hideLanding();
-  $("status").textContent = "検索中…";
-  const data = await Api.search({
-    q: state.query, page, page_size: state.pageSize,
-    branch, member, lang, sort: state.sort,
-  });
+  closeSuggest();
+
+  // 世代を進める。これ以降に古い検索が返ってきても、その結果と進捗は捨てる。
+  const token = ++state.searchToken;
+  const fresh = () => token === state.searchToken;
+
+  setSearching(true);
+  $("status").textContent = progressLabel(null);
+  renderSkeleton();
+  $("pager").innerHTML = "";
+
+  let data;
+  try {
+    data = await Api.search({
+      q: state.query, page, page_size: state.pageSize,
+      branch, member, lang, sort: state.sort,
+    }, (p) => { if (fresh()) $("status").textContent = progressLabel(p); });
+  } catch (_) {
+    if (!fresh()) return;
+    setSearching(false);
+    $("results").innerHTML = "";
+    $("status").textContent = "検索に失敗しました。通信状況を確認して、もう一度お試しください。";
+    return;
+  }
+  if (!fresh()) return;  // より新しい検索が始まっている
+  setSearching(false);
 
   state.results = data.results || [];
   state.total = data.total || 0;
@@ -437,6 +494,109 @@ function renderRecent() {
   wrap.classList.remove("hidden");
 }
 
+// ---------- 入力補完（サジェスト） ----------
+// 「何を検索できるのか分からない」を減らすため、実際に配信で話されている
+// 言い回しを前方一致で出す。候補は必ずヒットする（本文から作った語彙なので）。
+// IME 変換中は Enter / ↑↓ を横取りしない（変換確定を邪魔しない）。
+const AC_MAX = 8;
+const AC_DEBOUNCE = 80;
+const ac = { items: [], active: -1, token: 0, timer: null };
+
+function acOpen() {
+  return !$("ac").classList.contains("hidden");
+}
+
+function closeSuggest() {
+  // 保留中の更新（デバウンス待ち・取得中）を無効にする。
+  // これを忘れると、検索を始めた直後に古い候補が開き直してしまう。
+  clearTimeout(ac.timer);
+  ac.token++;
+  const box = $("ac");
+  box.classList.add("hidden");
+  box.innerHTML = "";
+  ac.items = [];
+  ac.active = -1;
+  $("q").setAttribute("aria-expanded", "false");
+  $("q").removeAttribute("aria-activedescendant");
+}
+
+function markActiveSuggest() {
+  const box = $("ac");
+  [...box.children].forEach((li, i) => {
+    const on = i === ac.active;
+    li.classList.toggle("active", on);
+    li.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  const cur = box.children[ac.active];
+  if (cur) {
+    $("q").setAttribute("aria-activedescendant", cur.id);
+    cur.scrollIntoView({ block: "nearest" });
+  } else {
+    $("q").removeAttribute("aria-activedescendant");
+  }
+}
+
+function chooseSuggest(i) {
+  const word = ac.items[i];
+  if (!word) return;
+  $("q").value = word;
+  closeSuggest();
+  doSearch();
+}
+
+function renderSuggest(items) {
+  const box = $("ac");
+  if (!items.length) { closeSuggest(); return; }
+  ac.items = items;
+  ac.active = -1;
+  box.innerHTML = "";
+  items.forEach((w, i) => {
+    const li = document.createElement("li");
+    li.id = `ac-opt-${i}`;
+    li.className = "ac-item";
+    li.setAttribute("role", "option");
+    li.setAttribute("aria-selected", "false");
+    li.textContent = w;
+    // blur より先に拾う（クリックしたときに候補が閉じて空振りしないように）
+    li.addEventListener("mousedown", (e) => { e.preventDefault(); chooseSuggest(i); });
+    box.appendChild(li);
+  });
+  box.classList.remove("hidden");
+  $("q").setAttribute("aria-expanded", "true");
+}
+
+async function updateSuggest() {
+  if (!Api.suggest) return;
+  const prefix = $("q").value;
+  const token = ++ac.token;
+  let items = [];
+  try { items = await Api.suggest(prefix, AC_MAX); } catch (_) { items = []; }
+  // 打ち直しの途中で返ってきた古い候補は捨てる
+  if (token !== ac.token || $("q").value !== prefix) return;
+  renderSuggest(items);
+}
+
+function scheduleSuggest() {
+  clearTimeout(ac.timer);
+  ac.timer = setTimeout(updateSuggest, AC_DEBOUNCE);
+}
+
+function onSuggestKey(e) {
+  if (e.isComposing) return;  // IME 変換中はすべて入力欄に任せる
+  if (e.key === "Escape") { if (acOpen()) { e.preventDefault(); closeSuggest(); } return; }
+  if (e.key === "Enter") {
+    if (acOpen() && ac.active >= 0) { e.preventDefault(); chooseSuggest(ac.active); }
+    return;
+  }
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  if (!acOpen()) { if (e.key === "ArrowDown") scheduleSuggest(); return; }
+  if (!ac.items.length) return;
+  e.preventDefault();
+  const step = e.key === "ArrowDown" ? 1 : -1;
+  ac.active = (ac.active + step + ac.items.length) % ac.items.length;
+  markActiveSuggest();
+}
+
 // ---------- ランディング（検索前）: カバレッジ統計 + おすすめ検索 ----------
 const SUGGESTED = ["おはよ", "ありがと", "ぺこ", "こんにちは", "hello", "です", "配信", "ました"];
 
@@ -502,6 +662,10 @@ function init() {
   $("loop-btn").addEventListener("click", () => toggleLoop());
   $("share-btn").addEventListener("click", shareCurrent);
   $("recent-clear").addEventListener("click", clearRecent);
+  $("q").addEventListener("input", scheduleSuggest);
+  $("q").addEventListener("focus", scheduleSuggest);
+  $("q").addEventListener("keydown", onSuggestKey);
+  $("q").addEventListener("blur", closeSuggest);
   $("speed").addEventListener("change", () => {
     state.speed = parseFloat($("speed").value) || 1;
     applySpeed();

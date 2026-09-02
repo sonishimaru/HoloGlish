@@ -13,9 +13,14 @@
   </header>
 
   <main>
-    <form id="search-form" class="search">
-      <input id="q" type="text" placeholder="例: おはよ、ぺこ、hello …" autocomplete="off" autofocus />
-      <button type="submit">検索</button>
+    <form id="search-form" class="search" role="search">
+      <!-- 入力補完: 実際に話されている言い回しを前方一致で出す（↑↓ で選択、Enter で検索） -->
+      <div class="q-wrap">
+        <input id="q" type="text" placeholder="例: おはよ、ぺこ、hello …" autocomplete="off" autofocus
+               role="combobox" aria-expanded="false" aria-controls="ac" aria-autocomplete="list" />
+        <ul id="ac" class="ac hidden" role="listbox" aria-label="検索候補"></ul>
+      </div>
+      <button id="search-btn" type="submit">検索</button>
     </form>
 
     <div class="filters">
@@ -28,7 +33,7 @@
       </select>
     </div>
 
-    <div id="status" class="status"></div>
+    <div id="status" class="status" role="status" aria-live="polite"></div>
 
     <section id="landing" class="landing hidden">
       <p id="coverage" class="coverage"></p>
@@ -97,7 +102,7 @@
       </div>
     </section>
 
-    <ul id="results" class="results"></ul>
+    <ul id="results" class="results" aria-busy="false"></ul>
     <div id="pager" class="pager"></div>
   </main>
 
