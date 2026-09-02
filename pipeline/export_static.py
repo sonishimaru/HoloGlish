@@ -25,6 +25,7 @@ GitHub Pages 等にそのまま公開でき、収集した索引を「キャッ�
   static/idx/bi/<k>.json        2-gram → [group, mask, ...]
   static/idx/tri/<k>.json       3-gram → [group, mask, ...]
   static/idx/v/<video_id>.json  {meta, segs}
+  static/idx/suggest.json       入力補完の候補語彙（実際に話されている言い回し）
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ import sqlite3
 from typing import Any, Dict, List, Set
 
 from .normalize import normalize
+from .suggest import build_suggestions
 from server import search as _search
 
 WEB_DIR = os.path.join(os.path.dirname(__file__), os.pardir, "web")
@@ -224,6 +226,11 @@ def export_site(conn: sqlite3.Connection, out_dir: str) -> Dict[str, Any]:
     os.makedirs(v_dir, exist_ok=True)
     for vid, payload in idx["videos"].items():
         _dump(os.path.join(v_dir, f"{vid}.json"), payload)
+
+    # 入力補完の候補語彙。「何を検索できるか」が分からない状態を避けるため、
+    # 実際に話されている言い回しだけを候補にする（選べば必ずヒットする）。
+    texts = [seg[2] for payload in idx["videos"].values() for seg in payload["segs"]]
+    _dump(os.path.join(idx_dir, "suggest.json"), build_suggestions(texts))
 
     # 収集状況（ライバー別の完了/未収集）を Pages にも同梱し、安定URLで配信する。
     # （Google スプレッドシートの Apps Script はこの JSON を取得して自動更新する）

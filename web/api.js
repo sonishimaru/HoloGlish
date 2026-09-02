@@ -16,6 +16,9 @@
 //    バケットだけを取得する（起動時に読むのは manifest だけ）。
 //  - 1文字クエリ用に uni 索引もあるため、1文字でも全走査しない。
 //  - 打ち切った場合は partial:true（total は下限）。
+//  - search(p, onProgress) は取得の進み具合を逐次通知する（画面が止まって見えないように）。
+//
+// 入力補完（suggest）は別ファイル suggest.json。最初の入力があって初めて取得する。
 
 const Api = (function () {
   const qs = (params) => {
@@ -34,6 +37,8 @@ const Api = (function () {
       async context(p) { return (await fetch(`/api/context?${qs(p)}`)).json(); },
       async facets() { return (await fetch("/api/facets")).json(); },
       async stats() { return (await fetch("/api/stats")).json(); },
+      // 入力補完の語彙は静的索引の生成物（suggest.json）なのでサーバモードでは持たない
+      async suggest() { return []; },
     };
   }
 
@@ -210,7 +215,12 @@ const Api = (function () {
 
   // 候補動画を新しい順に見て、必要件数が埋まったら打ち切る。
   // 返り値 partial:true は「まだ先に一致があり得る（total は下限）」の意。
-  async function collectHits(terms, f, needed, sort) {
+  // onProgress は取得の進み具合を逐次通知する（画面を止めて見せないため）。
+  async function collectHits(terms, f, needed, sort, onProgress) {
+    const notify = (phase, candidates, scanned, hits) => {
+      if (onProgress) onProgress({ phase, candidates, scanned, hits });
+    };
+    notify("index", 0, 0, 0);
     let masks = null;
     for (const term of terms) {
       const m = await termMasks(term);
@@ -219,6 +229,7 @@ const Api = (function () {
     }
     const cands = masks ? candidateVideos(masks, f) : [];
     if (!cands.length) return { hits: [], partial: false, candidates: 0 };
+    notify("scan", cands.length, 0, 0);
 
     const byDate = sort !== "relevance";
     const want = byDate ? needed : Math.max(needed, RELEVANCE_MIN_POOL);
@@ -231,6 +242,7 @@ const Api = (function () {
       const loaded = await getVideos(batch);
       batch.forEach((vi, k) => scanVideo(loaded[k], vi, terms, f, hits));
       scanned += batch.length;
+      notify("scan", cands.length, scanned, hits.length);
       if (hits.length >= want) break;
       // 次に取る数は、ここまでの「1動画あたりの命中数」から見積もる。
       // まだ0件のうちは手掛かりが無いので倍々で広げる。
@@ -252,7 +264,8 @@ const Api = (function () {
     };
   }
 
-  async function search(p) {
+  async function search(p, onProgress) {
+    if (onProgress) onProgress({ phase: "index", candidates: 0, scanned: 0, hits: 0 });
     await load();
     const query = (p.q || "").trim();
     const sort = p.sort === "relevance" ? "relevance" : "date";
@@ -266,7 +279,7 @@ const Api = (function () {
     const f = { member: p.member || "", branch: p.branch || "", lang: p.lang || "" };
     // そのページを埋めるのに必要な件数（+1 で「まだ先がある」を判定できる）
     const needed = page * pageSize + 1;
-    const { hits, partial } = await collectHits(terms, f, needed, sort);
+    const { hits, partial } = await collectHits(terms, f, needed, sort, onProgress);
 
     const nt = (h) => videoCache.get(h.vi).norms[h.si];
     if (sort === "relevance") {
@@ -313,7 +326,33 @@ const Api = (function () {
   async function facets() { await load(); return manifest.facets; }
   async function stats() { await load(); return manifest.stats; }
 
-  return { mode: "static", search, context, facets, stats };
+  // ---------- 入力補完 ----------
+  // suggest.json は「実際に話されている言い回し」だけを頻度順に並べたもの。
+  // 初回の入力時にだけ取りに行き（起動を遅らせない）、以後はメモリ上で前方一致。
+  // 照合は検索と同じ正規化を通すので、カナ/かな・全角/半角の違いを吸収する。
+  let suggestList = null;
+  async function suggest(prefix, limit = 8) {
+    const key = normalizeText(prefix || "");
+    if (!key) return [];
+    if (!suggestList) {
+      try {
+        const data = await fetchJson(`${BASE}/suggest.json`);
+        suggestList = (data.items || []).map((it) => ({ t: it.t, k: normalizeText(it.t) }));
+      } catch (_) {
+        suggestList = []; // 候補が無くても検索そのものは動く
+      }
+    }
+    const out = [];
+    for (const s of suggestList) {
+      if (s.k !== key && s.k.startsWith(key)) {
+        out.push(s.t);
+        if (out.length >= limit) break;
+      }
+    }
+    return out;
+  }
+
+  return { mode: "static", search, context, facets, stats, suggest };
 })();
 
 window.Api = Api;

@@ -243,3 +243,34 @@ def test_index_segment_count_matches(built_db):
     conn.close()
     counted = sum(len(v["segs"]) for v in idx["videos"].values())
     assert counted == total == idx["manifest"]["segments"]
+
+
+def test_suggestions_are_written_and_always_hit(built_db, tmp_path):
+    """入力補完の候補は本文から作るので、そのまま検索すれば必ずヒットする。"""
+    from server import search
+
+    out = str(tmp_path / "site")
+    conn = db.connect(built_db)
+    export_static.export_site(conn, out)
+
+    built = _load(os.path.join(out, "static", "idx", "suggest.json"))
+    words = [it["t"] for it in built["items"]]
+    assert words, "候補が1つも出ないのは索引が空か足切りが厳しすぎる"
+    assert len(words) == len(set(words))
+    for w in words:
+        assert search.search(conn, w, page_size=100)["total"] > 0, w
+    conn.close()
+
+
+def test_suggestion_prefix_lookup_finds_the_phrase(built_db, tmp_path):
+    """打ちかけ（前方一致）で言い回しが引ける — 補完としての最低条件。"""
+    from pipeline.normalize import normalize
+
+    out = str(tmp_path / "site")
+    conn = db.connect(built_db)
+    export_static.export_site(conn, out)
+    conn.close()
+
+    keys = [normalize(it["t"]) for it in
+            _load(os.path.join(out, "static", "idx", "suggest.json"))["items"]]
+    assert any(k.startswith(normalize("おは")) for k in keys), keys
