@@ -34,10 +34,11 @@ import json
 import os
 import shutil
 import sqlite3
-from typing import Any, Dict, List, Set
+from array import array
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from .normalize import normalize
-from .suggest import build_suggestions
+from .suggest import SAMPLE_MAX, build_suggestions
 from server import search as _search
 
 WEB_DIR = os.path.join(os.path.dirname(__file__), os.pardir, "web")
@@ -84,8 +85,7 @@ def _ordered_vids(videos: Dict[str, Dict[str, Any]]) -> List[str]:
     )
 
 
-def build_index_files(conn: sqlite3.Connection) -> Dict[str, Any]:
-    """索引一式（manifest / uni・bi・tri 索引 / 動画別データ）を返す。"""
+def _video_meta(conn: sqlite3.Connection) -> Dict[str, Dict[str, Any]]:
     videos: Dict[str, Dict[str, Any]] = {}
     for r in conn.execute(
         "SELECT video_id, member, member_ja, branch, lang, title, url, published_at, sub_kind FROM videos"
@@ -100,49 +100,69 @@ def build_index_files(conn: sqlite3.Connection) -> Dict[str, Any]:
             "published_at": r["published_at"] or "",
             "sub_kind": r["sub_kind"] or "",
         }
+    return videos
 
-    segs_by_video: Dict[str, List[List[Any]]] = {vid: [] for vid in videos}
-    seg_total = 0
-    for r in conn.execute(
-        "SELECT video_id, lang, start, dur, text FROM segments ORDER BY video_id, start"
-    ):
-        if r["video_id"] not in segs_by_video:
-            continue
-        segs_by_video[r["video_id"]].append([r["start"], r["dur"], r["text"], r["lang"] or ""])
-        seg_total += 1
 
+def _segs_for(conn: sqlite3.Connection, video_id: str) -> List[List[Any]]:
+    return [
+        [r["start"], r["dur"], r["text"], r["lang"] or ""]
+        for r in conn.execute(
+            "SELECT start, dur, text, lang FROM segments WHERE video_id = ? ORDER BY start",
+            (video_id,),
+        )
+    ]
+
+
+def _build_index(
+    conn: sqlite3.Connection,
+    on_video: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+) -> Dict[str, Any]:
+    """manifest と n-gram 索引を、動画1本ずつのストリーミングで構築する。
+
+    全発話を一括でメモリへ載せる作りだと、数千万発話の実データで Pages ビルドの
+    ランナーが物理メモリを使い切って落ちる（2026-09-25 に OOM で2連続失敗）。
+    動画単位に読み → n-gram を索引へ反映 → on_video へ渡して手放す、を繰り返す。
+    postings は [group, mask, ...] の平坦な C 配列（array）で持ち、Python
+    オブジェクトのオーバーヘッドを避ける。動画は新しい順に処理するため
+    group は単調増加で、配列は常に整列済み。
+    """
+    videos = _video_meta(conn)
     vids = _ordered_vids(videos)
 
     facets = _search.facets(conn)
     member_ix = {m["value"]: i for i, m in enumerate(facets.get("members", []))}
     branch_ix = {b: i for i, b in enumerate(facets.get("branches", []))}
 
-    # gram → {group: mask}
-    uni: Dict[str, Dict[int, int]] = {}
-    bi: Dict[str, Dict[int, int]] = {}
-    tri: Dict[str, Dict[int, int]] = {}
+    # gram → array([group, mask, group, mask, ...])
+    uni: Dict[str, array] = {}
+    bi: Dict[str, array] = {}
+    tri: Dict[str, array] = {}
 
+    seg_total = 0
     for i, vid in enumerate(vids):
         group, bit = i // MASK_GROUP, 1 << (i % MASK_GROUP)
+        segs = _segs_for(conn, vid)
+        seg_total += len(segs)
         g1: Set[str] = set()
         g2: Set[str] = set()
         g3: Set[str] = set()
-        for seg in segs_by_video.get(vid, []):
+        for seg in segs:
             norm = normalize(seg[2])
             g1 |= set(norm)
             g2 |= _ngrams(norm, 2)
             g3 |= _ngrams(norm, 3)
         for index, grams in ((uni, g1), (bi, g2), (tri, g3)):
             for g in grams:
-                d = index.get(g)
-                if d is None:
-                    index[g] = {group: bit}
+                a = index.get(g)
+                if a is None:
+                    index[g] = array("i", (group, bit))
+                elif a[-2] == group:
+                    a[-1] |= bit
                 else:
-                    d[group] = d.get(group, 0) | bit
-
-    def _flatten(index: Dict[str, Dict[int, int]]) -> Dict[str, List[int]]:
-        # [group, mask, group, mask, ...]（入れ子より JSON が小さい）
-        return {g: [x for grp in sorted(d) for x in (grp, d[grp])] for g, d in index.items()}
+                    a.append(group)
+                    a.append(bit)
+        if on_video is not None:
+            on_video(vid, {"meta": videos[vid], "segs": segs})
 
     manifest = {
         "version": INDEX_VERSION,
@@ -162,18 +182,29 @@ def build_index_files(conn: sqlite3.Connection) -> Dict[str, Any]:
     }
     return {
         "manifest": manifest,
-        "uni_index": _flatten(uni),
-        "bi_index": _flatten(bi),
-        "tri_index": _flatten(tri),
-        "videos": {
-            vid: {"meta": videos[vid], "segs": segs_by_video.get(vid, [])} for vid in vids
-        },
+        "uni_index": uni,
+        "bi_index": bi,
+        "tri_index": tri,
     }
 
 
-def _split_grams(index: Dict[str, List[int]], buckets: int) -> Dict[int, Dict[str, List[int]]]:
-    """gram 索引をハッシュでバケットへ分割する。"""
-    out: Dict[int, Dict[str, List[int]]] = {}
+def build_index_files(conn: sqlite3.Connection) -> Dict[str, Any]:
+    """索引一式（manifest / uni・bi・tri 索引 / 動画別データ）を返す。
+
+    全動画の本文をメモリに持つため、テスト・小規模データ用。
+    実データの書き出しは :func:`export_site`（ストリーミング）を使う。
+    """
+    payloads: Dict[str, Dict[str, Any]] = {}
+    idx = _build_index(conn, lambda vid, p: payloads.__setitem__(vid, p))
+    for key in ("uni_index", "bi_index", "tri_index"):
+        idx[key] = {g: list(a) for g, a in idx[key].items()}
+    idx["videos"] = payloads
+    return idx
+
+
+def _split_grams(index: Dict[str, Any], buckets: int) -> Dict[int, Dict[str, Any]]:
+    """gram 索引をハッシュでバケットへ分割する。postings は list / array どちらでも。"""
+    out: Dict[int, Dict[str, Any]] = {}
     for gram, postings in index.items():
         out.setdefault(gram_bucket(gram, buckets), {})[gram] = postings
     return out
@@ -201,11 +232,31 @@ def export_site(conn: sqlite3.Connection, out_dir: str) -> Dict[str, Any]:
             "window.HOLOGLISH_INDEX_BASE = 'static/idx';\n"
         )
 
-    idx = build_index_files(conn)
-
     def _dump(path: str, obj: Any) -> None:
         with open(path, "w", encoding="utf-8") as fp:
-            json.dump(obj, fp, ensure_ascii=False, separators=(",", ":"))
+            # default=list: postings の array を書き出し時にだけ list 化する
+            json.dump(obj, fp, ensure_ascii=False, separators=(",", ":"), default=list)
+
+    # 本文は動画単位。候補になった動画だけを取得できるようにする。
+    # 索引構築のストリーミング中にその場で書き出し、メモリへ溜め込まない。
+    v_dir = os.path.join(idx_dir, "v")
+    os.makedirs(v_dir, exist_ok=True)
+
+    # 入力補完のサンプリング（全文リストを作らず、書き出しついでに間引いて拾う）
+    total = conn.execute("SELECT COUNT(*) FROM segments").fetchone()[0]
+    stride = max(1, total // SAMPLE_MAX)
+    sample_texts: List[str] = []
+    seen = 0
+
+    def _write_video(vid: str, payload: Dict[str, Any]) -> None:
+        nonlocal seen
+        _dump(os.path.join(v_dir, f"{vid}.json"), payload)
+        for seg in payload["segs"]:
+            if seen % stride == 0:
+                sample_texts.append(seg[2])
+            seen += 1
+
+    idx = _build_index(conn, _write_video)
 
     _dump(os.path.join(idx_dir, "manifest.json"), idx["manifest"])
 
@@ -221,16 +272,9 @@ def export_site(conn: sqlite3.Connection, out_dir: str) -> Dict[str, Any]:
         for k in range(buckets):
             _dump(os.path.join(sub_dir, f"{k}.json"), parts.get(k, {}))
 
-    # 本文は動画単位。候補になった動画だけを取得できるようにする。
-    v_dir = os.path.join(idx_dir, "v")
-    os.makedirs(v_dir, exist_ok=True)
-    for vid, payload in idx["videos"].items():
-        _dump(os.path.join(v_dir, f"{vid}.json"), payload)
-
     # 入力補完の候補語彙。「何を検索できるか」が分からない状態を避けるため、
     # 実際に話されている言い回しだけを候補にする（選べば必ずヒットする）。
-    texts = [seg[2] for payload in idx["videos"].values() for seg in payload["segs"]]
-    _dump(os.path.join(idx_dir, "suggest.json"), build_suggestions(texts))
+    _dump(os.path.join(idx_dir, "suggest.json"), build_suggestions(sample_texts))
 
     # 収集状況（ライバー別の完了/未収集）を Pages にも同梱し、安定URLで配信する。
     # （Google スプレッドシートの Apps Script はこの JSON を取得して自動更新する）
