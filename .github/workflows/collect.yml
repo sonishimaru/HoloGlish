@@ -36,9 +36,9 @@ on:
         required: false
         default: "1.5"
       time_budget:
-        description: "収集の時間予算（秒）。ジョブ上限より手前で区切り公開に到達させる（既定18000=5時間）"
+        description: "収集の時間予算（秒）。ジョブ上限より手前で区切り公開に到達させる（既定14400=4時間）"
         required: false
-        default: "18000"
+        default: "14400"
       subs_source:
         description: "字幕取得経路 service/ytdlp/api/both（既定service=Supadata。IPブロック非依存）"
         required: false
@@ -132,8 +132,12 @@ jobs:
           LIST_DEPTH: ${{ inputs.list_depth || '0' }}
           SLEEP: ${{ inputs.sleep || '1.5' }}
           # ジョブ上限(350分=21000秒)より手前で区切り、必ず公開ステップに到達させる。
+          # 収集の前後（復元・カタログ・早期公開・最終公開）が索引の成長で計60分超
+          # かかるようになり、予算5時間では最終公開の途中でジョブ上限に達して収集分を
+          # 失った（2026-09-28 Run#149）。4時間にして約50分の余裕を確保する。
+          # クレジットが実質の上限なので、予算を縮めても月間の収集総量は変わらない。
           # 収集は再開可能なので、繰り返し実行で未取得分を積み上げる。
-          TIME_BUDGET: ${{ inputs.time_budget || '18000' }}
+          TIME_BUDGET: ${{ inputs.time_budget || '14400' }}
           # 字幕取得経路。service=有償の字幕取得サービス（Supadata。IPブロック非依存で
           # クラウド自動化に最適。Secret SUPADATA_API_KEY が必要）。schedule 実行時は
           # inputs が空のためこのフォールバック（service）が使われる。
