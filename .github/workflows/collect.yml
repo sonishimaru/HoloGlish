@@ -57,6 +57,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # 収集と公開は別ジョブに分ける。DB 全体の公開（圧縮3GB超の段階push）は索引の
+  # 成長で2時間級に伸び、同一ジョブではジョブ上限350分を収集と食い合って最終公開が
+  # 強制終了され、収集分（クレジット消費済み）を失う事故が繰り返された
+  # （Run#149, #262, #263）。ジョブ上限は各ジョブ独立なので、分離すれば公開が
+  # どれだけ遅くても収集分は失われない。受け渡しは artifact（分割済みパート）。
   collect:
     runs-on: ubuntu-latest
     # 全アーカイブ収集は長時間になりうるが、再開可能なので途中で切れても次回続行
@@ -119,16 +124,11 @@ jobs:
         run: |
           python -m pipeline.run coverage --out data/coverage.json || echo "coverage 生成をスキップ（続行）"
 
+      # 早期公開は coverage.json だけの軽量 push（数秒）。以前は DB 全体を
+      # 再 push していて約40分かかり、収集時間を圧迫していた。
       - name: Publish coverage early
         if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        # 所要時間を記録する: 最終公開もほぼ同じ作業なので、収集予算の計算で
-        # 「最終公開にどれだけ残すべきか」の実測値として使う。
-        run: |
-          T0=$(date +%s)
-          bash .github/scripts/publish_data.sh
-          echo "EARLY_PUBLISH_SECS=$(( $(date +%s) - T0 ))" >> "$GITHUB_ENV"
+        run: bash .github/scripts/publish_data.sh coverage-only || echo "早期公開に失敗（続行）"
 
       - name: Collect subtitles
         env:
@@ -152,19 +152,18 @@ jobs:
           HOLOGLISH_PLAYER_CLIENTS: ${{ inputs.player_clients }}
         run: |
           # 予算が未指定なら、ジョブ上限(350分=21000秒)から「ここまでの実測経過時間」と
-          # 「最終公開の予約（早期公開の実測×1.25+10分。作業内容がほぼ同じため）」を
-          # 引いた残りを使う。復元・カタログ・公開は索引の成長で毎月伸びるので、
-          # 固定予算では最終公開がジョブ上限に食い込み収集分を失う
-          # （2026-09-28 Run#149 で5時間分、2026-10-28 Run#262 で4時間分を喪失）。
+          # 「圧縮・分割・artifact アップロードの予約（60分）」を引いた残りを使う。
+          # 復元・カタログは索引の成長で毎月伸びるので、固定予算ではジョブ上限に
+          # 食い込み収集分を失う（Run#149, #262, #263）。DB の push は公開専用
+          # ジョブに分離済みで、このジョブに残る後処理は圧縮とアップロードだけ。
           # クレジットが実質の上限なので、予算が縮んでも月間の収集総量は変わらない。
           if [ -z "$TIME_BUDGET" ]; then
             ELAPSED=$(( $(date +%s) - ${JOB_START:-$(date +%s)} ))
-            EARLY=${EARLY_PUBLISH_SECS:-2400}
-            RESERVE=$(( EARLY + EARLY / 4 + 600 ))
+            RESERVE=3600
             TIME_BUDGET=$(( 21000 - ELAPSED - RESERVE ))
             [ "$TIME_BUDGET" -gt 14400 ] && TIME_BUDGET=14400
             [ "$TIME_BUDGET" -lt 600 ] && TIME_BUDGET=600
-            echo "収集予算を動的設定: ${TIME_BUDGET}秒（経過 ${ELAPSED}秒 / 公開予約 ${RESERVE}秒）"
+            echo "収集予算を動的設定: ${TIME_BUDGET}秒（経過 ${ELAPSED}秒 / 後処理予約 ${RESERVE}秒）"
           fi
           python -m pipeline.run collect \
             ${BRANCH:+--branch "$BRANCH"} \
@@ -179,9 +178,40 @@ jobs:
         run: |
           python -m pipeline.run coverage --out data/coverage.json || echo "coverage 生成をスキップ（続行）"
 
-      # 収集ステップが途中で失敗しても、それまでの索引・収集状況は公開する（データ保全）
-      - name: Publish index to hologlish-data branch
+      # 収集ステップが途中で失敗しても、それまでの索引・収集状況は公開する（データ保全）。
+      # push は公開専用ジョブで行うため、ここでは分割パートを artifact に載せるだけ。
+      - name: Package index for publishing
         if: always()
+        run: bash .github/scripts/publish_data.sh split "$RUNNER_TEMP/pub"
+
+      - name: Upload index artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hologlish-index
+          path: ${{ runner.temp }}/pub
+          retention-days: 1
+          # パートは既に gzip 済みなので再圧縮しない（アップロードが速くなる）
+          compression-level: 0
+          if-no-files-found: warn
+
+  # DB 全体の段階 push（2時間級に成長中）を独自のジョブ上限 350 分で行う。
+  # 収集ジョブが失敗・キャンセルでも、artifact があれば公開する（データ保全）。
+  publish:
+    needs: collect
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download index artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: hologlish-index
+          path: ${{ runner.temp }}/pub
+
+      - name: Publish index to hologlish-data branch
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash .github/scripts/publish_data.sh
+        run: bash .github/scripts/publish_data.sh push "$RUNNER_TEMP/pub"
