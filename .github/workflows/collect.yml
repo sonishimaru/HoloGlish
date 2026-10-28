@@ -36,9 +36,9 @@ on:
         required: false
         default: "1.5"
       time_budget:
-        description: "収集の時間予算（秒）。ジョブ上限より手前で区切り公開に到達させる（既定14400=4時間）"
+        description: "収集の時間予算（秒）。空なら自動（ジョブ上限から前後処理の実測時間を引いて逆算）"
         required: false
-        default: "14400"
+        default: ""
       subs_source:
         description: "字幕取得経路 service/ytdlp/api/both（既定service=Supadata。IPブロック非依存）"
         required: false
@@ -63,6 +63,10 @@ jobs:
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
+
+      # 収集予算の動的計算に使う基準時刻（ジョブ開始からの経過を測る）
+      - name: Mark job start
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -119,7 +123,12 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash .github/scripts/publish_data.sh
+        # 所要時間を記録する: 最終公開もほぼ同じ作業なので、収集予算の計算で
+        # 「最終公開にどれだけ残すべきか」の実測値として使う。
+        run: |
+          T0=$(date +%s)
+          bash .github/scripts/publish_data.sh
+          echo "EARLY_PUBLISH_SECS=$(( $(date +%s) - T0 ))" >> "$GITHUB_ENV"
 
       - name: Collect subtitles
         env:
@@ -131,13 +140,9 @@ jobs:
           # 過去アーカイブの奥へ前進する（新しい側から順に処理済みをスキップ）。
           LIST_DEPTH: ${{ inputs.list_depth || '0' }}
           SLEEP: ${{ inputs.sleep || '1.5' }}
-          # ジョブ上限(350分=21000秒)より手前で区切り、必ず公開ステップに到達させる。
-          # 収集の前後（復元・カタログ・早期公開・最終公開）が索引の成長で計60分超
-          # かかるようになり、予算5時間では最終公開の途中でジョブ上限に達して収集分を
-          # 失った（2026-09-28 Run#149）。4時間にして約50分の余裕を確保する。
-          # クレジットが実質の上限なので、予算を縮めても月間の収集総量は変わらない。
-          # 収集は再開可能なので、繰り返し実行で未取得分を積み上げる。
-          TIME_BUDGET: ${{ inputs.time_budget || '14400' }}
+          # 空（schedule 実行）なら下の run で動的に計算する。固定値は索引の成長で
+          # 前後処理が伸びると再び上限超過を起こすため、手動実行の明示指定専用。
+          TIME_BUDGET: ${{ inputs.time_budget }}
           # 字幕取得経路。service=有償の字幕取得サービス（Supadata。IPブロック非依存で
           # クラウド自動化に最適。Secret SUPADATA_API_KEY が必要）。schedule 実行時は
           # inputs が空のためこのフォールバック（service）が使われる。
@@ -146,6 +151,21 @@ jobs:
           # yt-dlp の innertube クライアント切替（bot判定回避）。空なら pipeline 既定。
           HOLOGLISH_PLAYER_CLIENTS: ${{ inputs.player_clients }}
         run: |
+          # 予算が未指定なら、ジョブ上限(350分=21000秒)から「ここまでの実測経過時間」と
+          # 「最終公開の予約（早期公開の実測×1.25+10分。作業内容がほぼ同じため）」を
+          # 引いた残りを使う。復元・カタログ・公開は索引の成長で毎月伸びるので、
+          # 固定予算では最終公開がジョブ上限に食い込み収集分を失う
+          # （2026-09-28 Run#149 で5時間分、2026-10-28 Run#262 で4時間分を喪失）。
+          # クレジットが実質の上限なので、予算が縮んでも月間の収集総量は変わらない。
+          if [ -z "$TIME_BUDGET" ]; then
+            ELAPSED=$(( $(date +%s) - ${JOB_START:-$(date +%s)} ))
+            EARLY=${EARLY_PUBLISH_SECS:-2400}
+            RESERVE=$(( EARLY + EARLY / 4 + 600 ))
+            TIME_BUDGET=$(( 21000 - ELAPSED - RESERVE ))
+            [ "$TIME_BUDGET" -gt 14400 ] && TIME_BUDGET=14400
+            [ "$TIME_BUDGET" -lt 600 ] && TIME_BUDGET=600
+            echo "収集予算を動的設定: ${TIME_BUDGET}秒（経過 ${ELAPSED}秒 / 公開予約 ${RESERVE}秒）"
+          fi
           python -m pipeline.run collect \
             ${BRANCH:+--branch "$BRANCH"} \
             ${MEMBERS:+--members "$MEMBERS"} \
