@@ -1,5 +1,6 @@
 """静的サイト書き出し（動画単位の n-gram 索引）のテスト。"""
 
+import gzip
 import json
 import os
 
@@ -7,6 +8,9 @@ from pipeline import db, export_static, run
 
 
 def _load(path):
+    if path.endswith(".gz"):
+        with gzip.open(path, "rt", encoding="utf-8") as fp:
+            return json.load(fp)
     return json.load(open(path, encoding="utf-8"))
 
 
@@ -35,6 +39,8 @@ def test_export_site_structure(built_db, tmp_path):
 
     manifest = _load(os.path.join(idx, "manifest.json"))
     assert manifest["version"] == 5
+    # 索引本体は gzip 配信（manifest 自体は監視用に平文のまま）
+    assert manifest["gz"] is True
     assert manifest["stats"]["videos"] == info["videos"]
     assert "members" in manifest["facets"]
     assert manifest["mask_group"] == export_static.MASK_GROUP
@@ -45,7 +51,7 @@ def test_export_site_structure(built_db, tmp_path):
 
     # 本文は動画単位（その語を含む動画だけ取得できるようにするため）
     for vid in manifest["vids"]:
-        assert os.path.isfile(os.path.join(idx, "v", f"{vid}.json")), vid
+        assert os.path.isfile(os.path.join(idx, "v", f"{vid}.json.gz")), vid
 
 
 def test_videos_are_date_ordered(built_db):
@@ -104,7 +110,7 @@ def test_gram_buckets_partition_whole_index(built_db, tmp_path):
     ):
         merged = {}
         for k in range(buckets):
-            part = _load(os.path.join(idx_dir, sub, f"{k}.json"))
+            part = _load(os.path.join(idx_dir, sub, f"{k}.json.gz"))
             for gram in part:
                 assert export_static.gram_bucket(gram, buckets) == k, gram
                 assert gram not in merged, f"{gram} が複数バケットに存在"
@@ -253,7 +259,7 @@ def test_suggestions_are_written_and_always_hit(built_db, tmp_path):
     conn = db.connect(built_db)
     export_static.export_site(conn, out)
 
-    built = _load(os.path.join(out, "static", "idx", "suggest.json"))
+    built = _load(os.path.join(out, "static", "idx", "suggest.json.gz"))
     words = [it["t"] for it in built["items"]]
     assert words, "候補が1つも出ないのは索引が空か足切りが厳しすぎる"
     assert len(words) == len(set(words))
@@ -272,5 +278,5 @@ def test_suggestion_prefix_lookup_finds_the_phrase(built_db, tmp_path):
     conn.close()
 
     keys = [normalize(it["t"]) for it in
-            _load(os.path.join(out, "static", "idx", "suggest.json"))["items"]]
+            _load(os.path.join(out, "static", "idx", "suggest.json.gz"))["items"]]
     assert any(k.startswith(normalize("おは")) for k in keys), keys
