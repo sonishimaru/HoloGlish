@@ -81,15 +81,30 @@ const Api = (function () {
   // 取得は1ファイル1回だけ（同時に同じものを要求しても1リクエストに束ねる）
   function fetchJson(url) {
     if (inflight.has(url)) return inflight.get(url);
-    const p = fetch(url).then((r) => r.json()).finally(() => inflight.delete(url));
+    const p = fetch(url).then((r) => readJson(r, url)).finally(() => inflight.delete(url));
     inflight.set(url, p);
     return p;
+  }
+
+  // 索引本体は配信容量を抑えるため gzip（.json.gz）。GitHub Pages は .gz を
+  // Content-Encoding 無しのバイナリとして配るので、ブラウザ内で展開する。
+  async function readJson(r, url) {
+    if (!url.endsWith(".gz")) return r.json();
+    try {
+      return await new Response(r.body.pipeThrough(new DecompressionStream("gzip"))).json();
+    } catch (_) {
+      // 配信側が展開済みの本文を返す環境（一部のローカルサーバ等）向けの保険
+      return (await fetch(url)).json();
+    }
   }
 
   async function load() {
     if (manifest) return;
     manifest = await fetchJson(`${BASE}/manifest.json`);
   }
+
+  // manifest.gz が立っている索引は .json.gz で配信されている（manifest 自体は常に平文）
+  const ext = () => (manifest && manifest.gz ? ".json.gz" : ".json");
 
   // pipeline/export_static.py の gram_bucket と同じ計算（FNV-1a 32bit / UTF-8）
   const _enc = new TextEncoder();
@@ -112,14 +127,14 @@ const Api = (function () {
     await Promise.all([...need].map(async (b) => {
       const ck = `${kind}:${b}`;
       if (gramCache.has(ck)) return;
-      gramCache.set(ck, await fetchJson(`${BASE}/${kind}/${b}.json`));
+      gramCache.set(ck, await fetchJson(`${BASE}/${kind}/${b}${ext()}`));
     }));
     return (gram) => (gramCache.get(`${kind}:${gramBucket(gram, buckets)}`) || {})[gram];
   }
 
   async function getVideo(vi) {
     if (videoCache.has(vi)) return videoCache.get(vi);
-    const v = await fetchJson(`${BASE}/v/${manifest.vids[vi]}.json`);
+    const v = await fetchJson(`${BASE}/v/${manifest.vids[vi]}${ext()}`);
     if (!v.norms) {
       // 照合用の正規化テキストを前計算（検索の度に再計算しない）
       v.norms = v.segs.map((seg) => normalizeText(seg[2]));
@@ -336,7 +351,8 @@ const Api = (function () {
     if (!key) return [];
     if (!suggestList) {
       try {
-        const data = await fetchJson(`${BASE}/suggest.json`);
+        await load(); // 拡張子の判定に manifest が要る
+        const data = await fetchJson(`${BASE}/suggest${ext()}`);
         suggestList = (data.items || []).map((it) => ({ t: it.t, k: normalizeText(it.t) }));
       } catch (_) {
         suggestList = []; // 候補が無くても検索そのものは動く

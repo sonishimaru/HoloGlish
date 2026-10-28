@@ -258,9 +258,13 @@ python -m http.server --directory site 8000
 - **スケーリング（索引 version 5）— 「その語を含む発話だけを取りに行く」**:
   索引は `static/idx/` に次の構成で書き出します。
   - `manifest.json` … 版・**投稿日の新しい順の動画ID一覧**・動画別のメンバー/ブランチ・facets・stats
-  - `uni/<k>.json` `bi/<k>.json` `tri/<k>.json` … n-gram → `[group, mask, ...]`
-  - `v/<video_id>.json` … その動画のメタと発話
-  - `suggest.json` … 入力補完の候補語彙（実際に話されている言い回し）
+  - `uni/<k>.json.gz` `bi/<k>.json.gz` `tri/<k>.json.gz` … n-gram → `[group, mask, ...]`
+  - `v/<video_id>.json.gz` … その動画のメタと発話
+  - `suggest.json.gz` … 入力補完の候補語彙（実際に話されている言い回し）
+
+  索引本体は gzip で書き出し、ブラウザ側で `DecompressionStream` により展開します
+  （GitHub Pages のデプロイ容量の壁を避けるため。`manifest.json` と `coverage.json`
+  は外部連携が直接読むので平文のまま）。
 
   速度の要点は3つです。
   - **索引が「どの動画に在るか」まで持つ**。動画を新しい順に並べ、24本ずつの

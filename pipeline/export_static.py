@@ -21,15 +21,23 @@ GitHub Pages 等にそのまま公開でき、収集した索引を「キャッ�
   index.html
   static/{app.js, api.js, style.css, config.js}
   static/idx/manifest.json      版・動画一覧(新しい順)・動画別メンバー/ブランチ・facets・stats
-  static/idx/uni/<k>.json       1-gram → [group, mask, ...]
-  static/idx/bi/<k>.json        2-gram → [group, mask, ...]
-  static/idx/tri/<k>.json       3-gram → [group, mask, ...]
-  static/idx/v/<video_id>.json  {meta, segs}
-  static/idx/suggest.json       入力補完の候補語彙（実際に話されている言い回し）
+  static/idx/uni/<k>.json.gz    1-gram → [group, mask, ...]
+  static/idx/bi/<k>.json.gz     2-gram → [group, mask, ...]
+  static/idx/tri/<k>.json.gz    3-gram → [group, mask, ...]
+  static/idx/v/<video_id>.json.gz  {meta, segs}
+  static/idx/suggest.json.gz    入力補完の候補語彙（実際に話されている言い回し）
+
+索引本体は gzip（.json.gz）で書き出す。GitHub Pages のデプロイは合計サイズが
+約3.5GBを超えると「成功と報告されるのに配信へ反映されない」壁があり
+（2026-10-27 に実際に到達）、生JSONのままでは全アーカイブを配りきれない。
+クライアント(api.js)は DecompressionStream('gzip') でブラウザ内展開する。
+manifest.json と coverage.json は監視やスプレッドシート連携が直接読むため
+平文のまま残す（どちらも小さい）。
 """
 
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import shutil
@@ -166,6 +174,9 @@ def _build_index(
 
     manifest = {
         "version": INDEX_VERSION,
+        # 索引ファイル（uni/bi/tri・v・suggest）は gzip 配信（.json.gz）。
+        # クライアントはこのフラグで拡張子と展開の要否を切り替える。
+        "gz": True,
         "videos": len(vids),
         "segments": seg_total,
         "mask_group": MASK_GROUP,
@@ -218,7 +229,7 @@ def export_site(conn: sqlite3.Connection, out_dir: str) -> Dict[str, Any]:
     # 前回の索引を消す（構成が変わっても古いファイルが残らないように）
     for f in os.listdir(idx_dir):
         p = os.path.join(idx_dir, f)
-        if f.endswith(".json"):
+        if f.endswith((".json", ".json.gz")):
             os.remove(p)
         elif os.path.isdir(p) and f in ("uni", "bi", "tri", "v"):
             shutil.rmtree(p)
@@ -237,6 +248,14 @@ def export_site(conn: sqlite3.Connection, out_dir: str) -> Dict[str, Any]:
             # default=list: postings の array を書き出し時にだけ list 化する
             json.dump(obj, fp, ensure_ascii=False, separators=(",", ":"), default=list)
 
+    def _dump_gz(path: str, obj: Any) -> None:
+        # Pages の配信容量を生JSONの約1/3に抑える（モジュール先頭の設計コメント参照）。
+        # mtime=0 で内容が同じなら再生成しても同一バイトになる。level 6 は 9 と
+        # 圧縮率がほぼ同じで、数万ファイルの書き出し時間を大きく節約できる。
+        data = json.dumps(obj, ensure_ascii=False, separators=(",", ":"), default=list)
+        with gzip.GzipFile(path, "wb", compresslevel=6, mtime=0) as fp:
+            fp.write(data.encode("utf-8"))
+
     # 本文は動画単位。候補になった動画だけを取得できるようにする。
     # 索引構築のストリーミング中にその場で書き出し、メモリへ溜め込まない。
     v_dir = os.path.join(idx_dir, "v")
@@ -250,7 +269,7 @@ def export_site(conn: sqlite3.Connection, out_dir: str) -> Dict[str, Any]:
 
     def _write_video(vid: str, payload: Dict[str, Any]) -> None:
         nonlocal seen
-        _dump(os.path.join(v_dir, f"{vid}.json"), payload)
+        _dump_gz(os.path.join(v_dir, f"{vid}.json.gz"), payload)
         for seg in payload["segs"]:
             if seen % stride == 0:
                 sample_texts.append(seg[2])
@@ -270,11 +289,11 @@ def export_site(conn: sqlite3.Connection, out_dir: str) -> Dict[str, Any]:
         os.makedirs(sub_dir, exist_ok=True)
         parts = _split_grams(index, buckets)
         for k in range(buckets):
-            _dump(os.path.join(sub_dir, f"{k}.json"), parts.get(k, {}))
+            _dump_gz(os.path.join(sub_dir, f"{k}.json.gz"), parts.get(k, {}))
 
     # 入力補完の候補語彙。「何を検索できるか」が分からない状態を避けるため、
     # 実際に話されている言い回しだけを候補にする（選べば必ずヒットする）。
-    _dump(os.path.join(idx_dir, "suggest.json"), build_suggestions(sample_texts))
+    _dump_gz(os.path.join(idx_dir, "suggest.json.gz"), build_suggestions(sample_texts))
 
     # 収集状況（ライバー別の完了/未収集）を Pages にも同梱し、安定URLで配信する。
     # （Google スプレッドシートの Apps Script はこの JSON を取得して自動更新する）
