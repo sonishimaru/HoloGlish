@@ -1,0 +1,66 @@
+name: Restore Data Branch
+
+# hologlish-data ブランチを過去の公開コミットから復旧する（手動実行専用）。
+#
+# 背景: 2026-10-30 Run#273 で索引の復元が一時障害で失敗し、空同然のDBで
+# 収集→公開（force push）され、蓄積56,000本超の索引ブランチが上書き消失した。
+# force push で到達不能になった旧コミットも GitHub 上にはしばらく残り
+# SHA 直指定で fetch できるため、このワークフローで取り出して再公開する。
+# （旧コミットの SHA は repos/{repo}/events API の PushEvent から拾える）
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "復元元コミットSHA（hologlish-data の過去の公開コミット、40桁）"
+        required: true
+
+permissions:
+  contents: write
+
+# collect と同じグループにして、収集ランと同時に走らないようにする
+concurrency:
+  group: hologlish-collect
+  cancel-in-progress: false
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install PyYAML
+
+      - name: Fetch old commit and restore DB
+        env:
+          SHA: ${{ inputs.sha }}
+        run: |
+          echo "$SHA" | grep -qE '^[0-9a-f]{40}$' || { echo "::error::SHA の形式が不正"; exit 1; }
+          git fetch origin "$SHA"
+          mkdir -p data
+          bash .github/scripts/db_restore.sh "$SHA" data/hologlish.db
+          python3 - <<'EOF'
+          import sqlite3
+          con = sqlite3.connect("data/hologlish.db")
+          v = con.execute("SELECT COUNT(*) FROM videos").fetchone()[0]
+          s = con.execute("SELECT COUNT(*) FROM segments").fetchone()[0]
+          print(f"復元したDB: videos={v} segments={s}")
+          assert v > 0 and s > 0, "復元したDBが空"
+          EOF
+
+      - name: Rebuild coverage
+        run: python -m pipeline.run coverage --out data/coverage.json
+
+      # 復旧は意図的な全置換なので縮小ガードを明示的に通す
+      - name: Publish restored index
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ALLOW_SHRINK: "1"
+        run: bash .github/scripts/publish_data.sh

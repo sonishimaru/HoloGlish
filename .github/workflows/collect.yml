@@ -83,14 +83,23 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # 【重要】復元に失敗したら必ずランを中断する。以前は失敗時に「新規作成」へ
+      # フォールバックしていたが、2026-10-30 Run#273 で一時的な取得失敗から
+      # 空同然のDBが作られ、それが最終公開の force push で蓄積56,000本超の
+      # ブランチを上書きし、全データを消失した。失敗したランは6時間後の次回
+      # cron がやり直すだけで済む。新規作成はブランチが本当に無い初回だけ。
       - name: Restore accumulated index
         run: |
           mkdir -p data
-          if git fetch origin hologlish-data:hologlish-data 2>/dev/null; then
+          if git fetch origin hologlish-data:hologlish-data; then
             bash .github/scripts/db_restore.sh hologlish-data data/hologlish.db \
               && echo "既存の索引を復元しました" \
-              || echo "索引ファイルが見つからないため新規作成します"
+              || { echo "::error::ブランチは取得できたが索引の復元に失敗。データ保全のため中断します"; exit 1; }
           else
+            if timeout 60 curl -fsS "https://api.github.com/repos/${GITHUB_REPOSITORY}/branches/hologlish-data" >/dev/null 2>&1; then
+              echo "::error::hologlish-data は存在するのに取得に失敗（一時障害の可能性）。データ保全のため中断します"
+              exit 1
+            fi
             echo "hologlish-data ブランチが無いため新規作成します"
           fi
 
@@ -190,7 +199,8 @@ jobs:
         with:
           name: hologlish-index
           path: ${{ runner.temp }}/pub
-          retention-days: 1
+          # 公開事故（ブランチ上書き等）からの復旧窓として3日残す
+          retention-days: 3
           # パートは既に gzip 済みなので再圧縮しない（アップロードが速くなる）
           compression-level: 0
           if-no-files-found: warn

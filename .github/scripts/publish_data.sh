@@ -57,6 +57,25 @@ push_dir() {
     echo "公開するパートが無いためスキップします"
     exit 0
   fi
+
+  # 【ガード】既存ブランチより大幅に縮んだ索引で上書きしない。復元の失敗などで
+  # 空同然のDBが出来たとき、force push がそのまま蓄積データの消失になるのを防ぐ
+  # （2026-10-30 Run#273 で実際に56,000本超を消失）。意図的な置換（復旧等）は
+  # ALLOW_SHRINK=1 で明示する。
+  if [ "${ALLOW_SHRINK:-0}" != "1" ]; then
+    local new_parts old_parts
+    new_parts=$(ls "$dir"/hologlish.db.gz.part-* | wc -l | tr -d ' ')
+    old_parts=$(curl -fsS -H "Authorization: Bearer ${GH_TOKEN}" \
+      "https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/?ref=hologlish-data" 2>/dev/null \
+      | python3 -c 'import json,sys; d=json.load(sys.stdin); print(sum(1 for f in d if f["name"].startswith("hologlish.db.gz.part-")))' \
+      2>/dev/null || echo 0)
+    if [ "$old_parts" -gt 0 ] && [ $(( new_parts * 2 )) -lt "$old_parts" ]; then
+      echo "::error::新しい索引 ($new_parts パート) が既存 ($old_parts パート) の半分未満。上書きを中止します（意図的なら ALLOW_SHRINK=1）"
+      exit 1
+    fi
+    echo "縮小ガード: 新 $new_parts パート / 既存 $old_parts パート → 続行"
+  fi
+
   cd "$dir"
   git init -q
   # 新規に git init したこのリポジトリに author 情報を設定する
