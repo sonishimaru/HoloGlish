@@ -27,6 +27,11 @@ split_db() {
   # 拒否する（収集が進み 776MB に達した索引が弾かれ、収集分を失った実績あり）。
   # 復元は .github/scripts/db_restore.sh（連結→gunzip）で行う。
   gzip -6 -c data/hologlish.db | split -b 90m - "$dir/hologlish.db.gz.part-"
+  # 【重要】パートの完全性マニフェスト。artifact の受け渡しで一部パートが
+  # 欠落・切断しても step は success になり得る（2026-11-12 Run#310 で
+  # 12GB 中 8.4GB しか展開されないまま push され、蓄積ブランチが切断DBに
+  # なった）。push 側はこのマニフェストを検証してから公開する。
+  (cd "$dir" && sha256sum hologlish.db.gz.part-* > parts.sha256)
   # 収集状況（あれば）も一緒に公開。Google スプレッドシートがこの JSON を読む。
   [ -f data/coverage.json ] && cp data/coverage.json "$dir/coverage.json" || true
 
@@ -57,6 +62,17 @@ push_dir() {
     echo "公開するパートが無いためスキップします"
     exit 0
   fi
+
+  # 【検証】split 時のマニフェストと突き合わせ、欠落・切断・破損があれば公開しない
+  if [ ! -f "$dir/parts.sha256" ]; then
+    echo "::error::parts.sha256 が無いため公開を中止します（パートの完全性を確認できない）"
+    exit 1
+  fi
+  if ! (cd "$dir" && sha256sum -c --quiet parts.sha256); then
+    echo "::error::パートの検証に失敗（欠落または切断）。公開を中止します"
+    exit 1
+  fi
+  echo "パート検証 OK ($(wc -l < "$dir/parts.sha256" | tr -d ' ') パート)"
 
   # 【ガード】既存ブランチより大幅に縮んだ索引で上書きしない。復元の失敗などで
   # 空同然のDBが出来たとき、force push がそのまま蓄積データの消失になるのを防ぐ
@@ -105,7 +121,7 @@ push_dir() {
     fi
     echo "  staged: $p"
   done
-  git add README.md
+  git add README.md parts.sha256
   [ -f coverage.json ] && git add coverage.json || true
   git commit -q -m "索引を更新 ($(date -u +%Y-%m-%dT%H:%MZ))"
   git push -q origin "HEAD:$staging"
