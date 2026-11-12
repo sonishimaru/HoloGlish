@@ -89,6 +89,7 @@ jobs:
       # ブランチを上書きし、全データを消失した。失敗したランは6時間後の次回
       # cron がやり直すだけで済む。新規作成はブランチが本当に無い初回だけ。
       - name: Restore accumulated index
+        id: restore
         run: |
           mkdir -p data
           if git fetch origin hologlish-data:hologlish-data; then
@@ -189,12 +190,15 @@ jobs:
 
       # 収集ステップが途中で失敗しても、それまでの索引・収集状況は公開する（データ保全）。
       # push は公開専用ジョブで行うため、ここでは分割パートを artifact に載せるだけ。
+      # 【重要】復元が失敗したランでは公開しない（always() だけだと、復元失敗の
+      # 残骸や新規DBを artifact 化して蓄積ブランチを上書きしてしまう。
+      # 2026-11-12 Run#311 で切断DBが公開された）。
       - name: Package index for publishing
-        if: always()
+        if: always() && steps.restore.outcome == 'success'
         run: bash .github/scripts/publish_data.sh split "$RUNNER_TEMP/pub"
 
       - name: Upload index artifact
-        if: always()
+        if: always() && steps.restore.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: hologlish-index
