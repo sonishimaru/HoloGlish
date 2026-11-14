@@ -32,13 +32,19 @@
         <option value="relevance">一致度順</option>
       </select>
       <!-- 自動字幕は「楽しい」「可愛い」のように漢字で書くことが多く、かなで打つと
-           大半を取りこぼす。読みが同じ表記もまとめて探す（既定 ON） -->
-      <label class="toggle" title="「たのしい」で「楽しい」も、「可愛い」で「かわいい」も探します">
-        <input id="f-variants" type="checkbox" checked /> 漢字・かなの表記ゆれも探す
+           大半を取りこぼす。読みが同じ表記・のばし棒をゆるめた形もまとめて探す（既定 ON） -->
+      <label class="toggle" title="「たのしい」で「楽しい」も、「おはよー」で「おはよう」も探します">
+        <input id="f-variants" type="checkbox" checked /> 表記ゆれも探す
+      </label>
+      <!-- 原形で打って活用形も探す（語学向け）。検索の意味が変わるので既定 OFF -->
+      <label class="toggle" title="「楽しい」で「楽しかった」「楽しく」も、「頑張る」で「頑張って」も探します">
+        <input id="f-inflect" type="checkbox" /> 活用形も探す
       </label>
     </div>
 
     <div id="status" class="status" role="status" aria-live="polite"></div>
+    <!-- ローマ字入力への「もしかして」（arigatou → ありがとう）。置き換えはせず提案だけ -->
+    <div id="dym" class="dym hidden"></div>
 
     <section id="landing" class="landing hidden">
       <p id="coverage" class="coverage"></p>

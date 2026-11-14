@@ -173,29 +173,41 @@ def build_suggestions(
     sample = texts[::stride]
     min_count = max(3, len(sample) // 20000)
     items = mine(sample, min_count=min_count, limit=limit)
-    attach_readings(items)
+    attach_annotations(items)
     return {
-        "version": 2,
+        # 2: 漢字を含む語に読み r。3: 活用した語に原形 b・断片の印 f。
+        "version": 3,
         "sampled": len(sample),
         "min_count": min_count,
         "items": items,
     }
 
 
-def attach_readings(items: List[Dict[str, Any]]) -> int:
-    """漢字を含む候補に読み ``r``（ひらがなのリスト）を付ける。付けた件数を返す。
+def attach_annotations(items: List[Dict[str, Any]]) -> Dict[str, int]:
+    """候補に検索を広げるための注釈を付ける。付けた件数を種類ごとに返す。
 
-    クライアントはこれを2通りに使う:
-    - 入力補完: 「たの」と打つと読みの前方一致で「楽しい」も出す。
-    - 表記ゆれ展開: 「たのしい」で検索すると「楽しい」も含めて探す。
-    読み付けの依存が無い環境では何も付けない（補完は表記の前方一致だけで動く）。
+    - ``r``: 漢字を含む語の読み（ひらがなのリスト）。
+      入力補完（「たの」→ 楽しい）と表記ゆれ展開（たのしい → 楽しい）に使う。
+    - ``b``: 活用した語の原形（楽しかった → 楽しい）。
+      「活用形も探す」で、原形の検索に活用形を含めるのに使う。
+    - ``f``: 助詞・助動詞などで始まる断片（って・にね）の印。
+      ローマ字の「もしかして」に断片を出さないのに使う（nine → にね を防ぐ）。
+
+    依存（読み付け・形態素解析）が無い環境では何も付けない。
     """
-    from .readings import reading_list
+    from .readings import base_form, is_fragment, reading_list
 
-    n = 0
+    counts = {"r": 0, "b": 0, "f": 0}
     for it in items:
         r = reading_list(it["t"])
         if r:
             it["r"] = r
-            n += 1
-    return n
+            counts["r"] += 1
+        b = base_form(it["t"])
+        if b:
+            it["b"] = b
+            counts["b"] += 1
+        if is_fragment(it["t"]):
+            it["f"] = 1
+            counts["f"] += 1
+    return counts
