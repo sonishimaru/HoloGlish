@@ -69,6 +69,8 @@ main { max-width: 900px; margin: 0 auto; padding: 0 16px 64px; }
 }
 
 .status { min-height: 22px; color: var(--muted); font-size: .9rem; margin: 6px 2px; }
+.dym { color: var(--muted); font-size: .9rem; margin: -2px 2px 8px; }
+.dym .linklike { font-size: .95rem; padding: 0 2px; }
 
 /* 左: 動画（大きめ）＋操作 / 右: 話者・キャプション。右列は左列の高さに揃える */
 .player-area {

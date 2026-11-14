@@ -88,7 +88,7 @@ def test_limit_caps_the_vocabulary():
 def test_build_suggestions_samples_large_corpora():
     texts = CORPUS * 200  # 2000 発話
     built = suggest.build_suggestions(texts, sample_max=100)
-    assert built["version"] == 2  # 2: 漢字を含む語に読み r が付く
+    assert built["version"] == 3  # 2: 読み r、3: 活用形の原形 b
     assert built["sampled"] <= 100
     assert built["items"], "標本からでも候補は取れる"
 
@@ -108,3 +108,22 @@ def test_kanji_items_carry_readings():
     assert by_t["今日"]["r"]  # きょう（と辞書によっては こんにち）
     assert "r" not in by_t["おはようございます"]
     assert "r" not in by_t["コラボ"]  # カタカナは正規化でひらがなに畳まれるので不要
+
+
+def test_inflected_items_carry_their_base_form():
+    """活用形には原形が付く（「活用形も探す」の土台）。原形を含む形には付けない。"""
+    import pytest
+
+    from pipeline import readings
+
+    if not readings.available():
+        pytest.skip("読み付けの依存が無い")
+    items = [{"t": "楽しかった", "n": 5}, {"t": "頑張って", "n": 5},
+             {"t": "楽しいね", "n": 5}, {"t": "楽しみ", "n": 5}]
+    counts = suggest.attach_annotations(items)
+    by_t = {it["t"]: it for it in items}
+    assert by_t["楽しかった"]["b"] == "楽しい"
+    assert by_t["頑張って"]["b"] == "頑張る"
+    assert "b" not in by_t["楽しいね"]   # 「楽しい」を含むので部分一致で既に当たる
+    assert "b" not in by_t["楽しみ"]     # 名詞（別の語）
+    assert counts["b"] == 2

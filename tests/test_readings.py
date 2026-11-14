@@ -42,3 +42,29 @@ def test_unreadable_leftovers_are_dropped():
 def test_reading_list_is_sorted_or_none():
     assert readings.reading_list("明日") == sorted(readings.readings("明日"))
     assert readings.reading_list("おはよう") is None
+
+
+@pytest.mark.parametrize("word, base", [
+    ("楽しかった", "楽しい"),
+    ("頑張って", "頑張る"),
+    ("食べたい", "食べる"),
+    ("面白くない", "面白い"),
+    ("楽しく", "楽しい"),
+    ("かわいかった", "かわいい"),  # 書かれた文字種のまま（lemma の「可愛い」ではない）
+])
+def test_base_form_of_inflected_words(word, base):
+    assert readings.base_form(word) == base
+
+
+@pytest.mark.parametrize("word", [
+    "楽しいね",   # 原形を含む → 部分一致で既に当たるので束ねる必要が無い
+    "楽しみ",     # 名詞（別の語）
+    "楽しそう",   # 様態の「そう」が続く → 別の言い回し
+    "楽しい曲",   # 名詞が続く
+    # 文の途中で切れた断片（束ねると「食べ」が「食べ物」まで当てる語幹検索になる）
+    "楽し", "食べ", "行っ", "行ってみ", "食べられ",
+    "おはよう",
+    "",
+])
+def test_base_form_is_none_for_non_inflections(word):
+    assert readings.base_form(word) is None

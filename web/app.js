@@ -24,7 +24,8 @@ const state = {
   ctxToken: 0,
   pendingClip: null, // 共有リンクで指定された用例 {v, t}
   searchToken: 0,    // 検索の世代。古い検索の結果・進捗を捨てるのに使う
-  expand: true,      // 表記ゆれ（漢字⇔かな）も含めて探すか
+  expand: true,      // 表記ゆれ（漢字⇔かな・のばし棒）も含めて探すか
+  inflect: false,    // 活用形も含めて探すか（楽しい → 楽しかった）
   variants: [],      // 語ごとに、入力以外に含めた表記（ハイライト・表示用）
 };
 
@@ -305,10 +306,28 @@ async function loadContext(r) {
   } catch (_) { /* 文脈は補助情報なので失敗しても本体は動く */ }
 }
 
-// 表記ゆれで含めた表記を明示する（何を探したのかが見えないと結果を信用できない）
+// 表記ゆれ・活用形で含めた表記を明示する（何を探したのかが見えないと結果を信用できない）
+const VARIANTS_SHOWN = 6;
 function variantsLabel() {
-  const shown = [...new Set((state.variants || []).flat())];
-  return shown.length ? `（${shown.join("・")} も含む）` : "";
+  const all = [...new Set((state.variants || []).flat())];
+  if (!all.length) return "";
+  const shown = all.slice(0, VARIANTS_SHOWN).join("・");
+  const more = all.length > VARIANTS_SHOWN ? ` ほか${all.length - VARIANTS_SHOWN}件` : "";
+  return `（${shown}${more} も含む）`;
+}
+
+// ローマ字入力への「もしかして」。押すとその語で検索し直す（勝手に置き換えはしない）
+function renderSuggestion(text) {
+  const box = $("dym");
+  box.innerHTML = "";
+  if (!text || text === state.query) { box.classList.add("hidden"); return; }
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "linklike";
+  b.textContent = text;
+  b.addEventListener("click", () => { $("q").value = text; doSearch(); });
+  box.append("もしかして: ", b);
+  box.classList.remove("hidden");
 }
 
 // 打ち切って返した場合、total は下限なので「N+ 件」と表す
@@ -349,6 +368,7 @@ function writeHash(includeClip = true) {
   if (lang) p.set("lang", lang);
   if (state.sort && state.sort !== "date") p.set("sort", state.sort);
   if (!state.expand) p.set("nv", "1"); // 表記ゆれを含めない（既定は含める）
+  if (state.inflect) p.set("infl", "1"); // 活用形も含める（既定は含めない）
   const r = includeClip ? state.results[state.index] : null;
   if (r) {
     p.set("v", r.video_id);
@@ -372,6 +392,7 @@ function readHash() {
     t: p.get("t") || "",
     clip: p.get("clip") === "1",
     expand: p.get("nv") !== "1",
+    inflect: p.get("infl") === "1",
   };
 }
 
@@ -389,6 +410,7 @@ async function loadPage(page, playFirst = false) {
   const fresh = () => token === state.searchToken;
 
   setSearching(true);
+  renderSuggestion(null); // 前の検索の「もしかして」を残さない
   $("status").textContent = progressLabel(null);
   renderSkeleton();
   $("pager").innerHTML = "";
@@ -397,7 +419,7 @@ async function loadPage(page, playFirst = false) {
   try {
     data = await Api.search({
       q: state.query, page, page_size: state.pageSize,
-      branch, member, lang, sort: state.sort, expand: state.expand,
+      branch, member, lang, sort: state.sort, expand: state.expand, inflect: state.inflect,
     }, (p) => { if (fresh()) $("status").textContent = progressLabel(p); });
   } catch (_) {
     if (!fresh()) return;
@@ -411,6 +433,7 @@ async function loadPage(page, playFirst = false) {
 
   state.results = data.results || [];
   state.variants = data.variants || [];
+  renderSuggestion(data.suggestion);
   state.total = data.total || 0;
   state.partial = !!data.partial;
   state.page = data.page || page;
@@ -681,6 +704,12 @@ function init() {
   if (h.sort === "relevance") { state.sort = "relevance"; $("f-sort").value = "relevance"; }
   state.expand = h.expand;
   $("f-variants").checked = state.expand;
+  state.inflect = h.inflect;
+  $("f-inflect").checked = state.inflect;
+  $("f-inflect").addEventListener("change", () => {
+    state.inflect = $("f-inflect").checked;
+    if (state.query) loadPage(1, true); else writeHash(false);
+  });
   $("f-variants").addEventListener("change", () => {
     state.expand = $("f-variants").checked;
     if (state.query) loadPage(1, true); else writeHash(false);

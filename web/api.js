@@ -70,10 +70,6 @@ const Api = (function () {
     }
     return out;
   }
-  function queryTerms(q) {
-    return q.trim().split(/\s+/).map(normalizeText).filter(Boolean);
-  }
-
   function ngrams(s, n) {
     const set = new Set();
     for (let i = 0; i + n <= s.length; i++) set.add(s.slice(i, i + n));
@@ -297,19 +293,26 @@ const Api = (function () {
 
   async function search(p, onProgress) {
     if (onProgress) onProgress({ phase: "index", candidates: 0, scanned: 0, hits: 0 });
-    const expand = !!p.expand;
-    // 展開には語彙が要る。manifest と並行して取りに行く（直列にしない）
-    await Promise.all([load(), expand ? loadVocab() : null]);
+    const expand = !!p.expand;    // 表記ゆれ（漢字⇔かな・のばし棒）
+    const inflect = !!p.inflect;  // 活用形
     const query = (p.q || "").trim();
+    const latin = /^[a-z' -]+$/i.test(query); // ローマ字なら「もしかして」を出す
+    // 展開・提案には語彙が要る。manifest と並行して取りに行く（直列にしない）
+    await Promise.all([load(), expand || inflect || latin ? loadVocab() : null]);
     const sort = p.sort === "relevance" ? "relevance" : "date";
     const page = Math.max(1, parseInt(p.page || 1, 10));
     const pageSize = Math.min(Math.max(parseInt(p.page_size || 20, 10), 1), 100);
-    const terms = queryTerms(query);
+    // のばし棒の判定は正規化前の表記で行う（カタカナ語の「ー」を残すため）ので、組で持つ
+    const raws = query.split(/\s+/).filter((w) => normalizeText(w));
+    const terms = raws.map(normalizeText);
+    const suggestion = latin ? romajiSuggestion(query) : null;
     if (!query || !terms.length) {
-      return { query, page, page_size: pageSize, total: 0, sort, partial: false, results: [], variants: [] };
+      return { query, page, page_size: pageSize, total: 0, sort, partial: false, results: [], variants: [], suggestion };
     }
-    // 語ごとに表記ゆれの組へ展開（展開しないときは自分だけの組）
-    const expanded = terms.map((t) => (expand ? expandTerm(t) : { norm: [t], display: [] }));
+    // 語ごとに、同じものとして探す表記の組へ展開（展開しないときは自分だけの組）
+    const expanded = terms.map((t, i) => (expand || inflect
+      ? expandTerm(t, raws[i], { spelling: expand, inflect })
+      : { norm: [t], display: [] }));
     const groups = expanded.map((e) => e.norm);
     // スニペットの切り出し位置: 生テキストに現れる表記（「楽しい」）も探す
     const needles = [...new Set(groups.flat().concat(expanded.flatMap((e) => e.display.map((d) => d.toLowerCase()))))];
@@ -343,6 +346,7 @@ const Api = (function () {
     return {
       query, page, page_size: pageSize, total, sort, partial, results,
       variants: expanded.map((e) => e.display),
+      suggestion, // ローマ字入力への「もしかして」（無ければ null）
     };
   }
 
@@ -371,66 +375,194 @@ const Api = (function () {
   async function facets() { await load(); return manifest.facets; }
   async function stats() { await load(); return manifest.stats; }
 
-  // ---------- 語彙（入力補完・表記ゆれ展開の共通の土台） ----------
-  // suggest.json は「実際に話されている言い回し」を頻度順に並べたもの。漢字を含む語には
-  // 読み r（ひらがな）が付いている。これを2通りに使う:
-  //  - 入力補完: 表記の前方一致に加え、読みの前方一致（「たの」→「楽しい」）。
-  //  - 表記ゆれ展開: 「たのしい」で検索すると「楽しい」も含めて探す。
-  //    自動字幕は漢字で書くことが多く、かなで打つと大半を取りこぼすため
-  //    （実データ: たのしい 72本 / 楽しい 26,570本）。
+  // ---------- 語彙（入力補完・検索語の展開の共通の土台） ----------
+  // suggest.json は「実際に話されている言い回し」を頻度順に並べたもの。注釈付き:
+  //   r: 漢字を含む語の読み（ひらがな）  b: 活用した語の原形（楽しかった → 楽しい）
+  // これを使って、入力した語だけでは届かない発話まで検索を広げる:
+  //  - 表記ゆれ: たのしい → 楽しい（自動字幕は漢字で書くことが多い。
+  //    実データ: たのしい 72本 / 楽しい 26,570本）。
+  //  - のばし棒・小書き文字: おはよー → おはよ（おはよう に届く。
+  //    実データ: おはよー 232本 / おはよう 12,348本）。
+  //  - 活用形（任意）: 楽しい → 楽しかった・楽しく（「楽しい」の部分一致では出ない）。
+  //  - ローマ字: arigatou → 「もしかして: ありがとう」（置き換えはせず提案だけ）。
   // 展開先はコーパスに実在する表記だけなので、展開しても空振りはしない。
-  const MAX_VARIANTS = 8;     // 1語あたりの表記の上限（同音異義が多い読みで膨らませない）
-  const MIN_READING = 2;      // 1文字の読み（「き」→ 木・気 …）は展開しない
+  const MAX_VARIANTS = 8;      // 表記ゆれの上限（同音異義が多い読みで膨らませない）
+  const MAX_INFLECTIONS = 6;   // 活用形の上限（頻度の高い順。索引の取得量を抑える）
+  const MIN_READING = 2;       // 1文字の読み（「き」→ 木・気 …）は展開しない
+  const ROMAJI_RATIO = 10;     // ローマ字が英語として普通に使われていれば提案しない
   let vocab = null;
   let vocabP = null;
 
-  function isKana(s) { return /^[\u3041-\u3096ー]+$/.test(s); }
+  function isKana(s) { return /^[ぁ-ゖー]+$/.test(s); }
+  const isHira = (c) => c >= "ぁ" && c <= "ゖ";
 
   function loadVocab() {
     if (vocabP) return vocabP;
     vocabP = (async () => {
       const list = [];
-      const byReading = new Map();  // 読み → [{t, k}]（頻度順）
+      const byKey = new Map();      // 表記(正規化) → 語
+      const byReading = new Map();  // 読み → [語]（頻度順）
       const readingsOf = new Map(); // 表記(正規化) → [読み]
+      const inflOf = new Map();     // 原形(正規化) → [活用形]（頻度順）
       try {
         await load(); // 拡張子の判定に manifest が要る
         const data = await fetchJson(`${BASE}/suggest${ext()}`);
         for (const it of data.items || []) {
-          const e = { t: it.t, k: normalizeText(it.t), r: (it.r || []).map(normalizeText) };
+          const e = { t: it.t, k: normalizeText(it.t), n: it.n || 0, r: (it.r || []).map(normalizeText) };
           list.push(e);
+          if (!byKey.has(e.k)) byKey.set(e.k, e);
           if (e.r.length) readingsOf.set(e.k, e.r);
           for (const r of e.r) {
             if (!byReading.has(r)) byReading.set(r, []);
             byReading.get(r).push(e);
           }
+          if (it.b) {
+            const b = normalizeText(it.b);
+            if (!inflOf.has(b)) inflOf.set(b, []);
+            inflOf.get(b).push(e);
+          }
+        }
+        // 他の活用形を含む形は冗長（「楽しかったね」は「楽しかった」で当たる）なので外す
+        for (const [b, forms] of inflOf) {
+          inflOf.set(b, forms.filter((f) => !forms.some((g) => g !== f && f.k.includes(g.k))));
         }
       } catch (_) {
         // 語彙が無くても検索・補完は表記どおりで動く
       }
-      vocab = { list, byReading, readingsOf };
+      vocab = { list, byKey, byReading, readingsOf, inflOf };
       return vocab;
     })();
     return vocabP;
   }
 
-  // 1語（正規化済み）を表記ゆれの組へ展開する。
-  // norm: 照合に使う正規化済みの表記（先頭は入力そのもの）
-  // display: 入力以外に含めた表記（画面に出す。語彙の表記そのまま）
-  function expandTerm(term) {
+  // 口語の打ち方をゆるめた形。ひらがなの後ろの のばし棒・波線・小書きの母音と、
+  // 末尾の「っ」を外す（おはよー → おはよ、すごーい → すごい、やばっ → やば）。
+  // カタカナ語の「ー」（コーヒー）は語の一部なので残す。入力は正規化前の表記。
+  function looseForm(raw) {
+    const s = (raw || "").normalize("NFKC").toLowerCase();
+    let out = "";
+    for (const c of s) {
+      const prev = out[out.length - 1] || "";
+      if ((c === "ー" || c === "~" || c === "〜") && isHira(prev)) continue;
+      if ("ぁぃぅぇぉ".includes(c) && isHira(prev)) continue;
+      out += c;
+    }
+    return normalizeText(out.replace(/っ+$/, ""));
+  }
+
+  // ローマ字 → ひらがな（ヘボン式・訓令式・IME の打ち方を受ける）。変換しきれなければ null。
+  const ROMAJI = (() => {
+    const t = {
+      a: "あ", i: "い", u: "う", e: "え", o: "お",
+      ka: "か", ki: "き", ku: "く", ke: "け", ko: "こ", kya: "きゃ", kyu: "きゅ", kyo: "きょ",
+      ga: "が", gi: "ぎ", gu: "ぐ", ge: "げ", go: "ご", gya: "ぎゃ", gyu: "ぎゅ", gyo: "ぎょ",
+      sa: "さ", si: "し", shi: "し", su: "す", se: "せ", so: "そ",
+      sha: "しゃ", shu: "しゅ", sho: "しょ", she: "しぇ", sya: "しゃ", syu: "しゅ", syo: "しょ",
+      za: "ざ", zi: "じ", ji: "じ", zu: "ず", ze: "ぜ", zo: "ぞ",
+      ja: "じゃ", ju: "じゅ", jo: "じょ", je: "じぇ", jya: "じゃ", jyu: "じゅ", jyo: "じょ",
+      zya: "じゃ", zyu: "じゅ", zyo: "じょ",
+      ta: "た", ti: "ち", chi: "ち", tu: "つ", tsu: "つ", te: "て", to: "と",
+      cha: "ちゃ", chu: "ちゅ", cho: "ちょ", che: "ちぇ", tya: "ちゃ", tyu: "ちゅ", tyo: "ちょ",
+      da: "だ", di: "ぢ", du: "づ", de: "で", do: "ど",
+      na: "な", ni: "に", nu: "ぬ", ne: "ね", no: "の", nya: "にゃ", nyu: "にゅ", nyo: "にょ",
+      ha: "は", hi: "ひ", hu: "ふ", fu: "ふ", he: "へ", ho: "ほ", hya: "ひゃ", hyu: "ひゅ", hyo: "ひょ",
+      fa: "ふぁ", fi: "ふぃ", fe: "ふぇ", fo: "ふぉ",
+      ba: "ば", bi: "び", bu: "ぶ", be: "べ", bo: "ぼ", bya: "びゃ", byu: "びゅ", byo: "びょ",
+      pa: "ぱ", pi: "ぴ", pu: "ぷ", pe: "ぺ", po: "ぽ", pya: "ぴゃ", pyu: "ぴゅ", pyo: "ぴょ",
+      ma: "ま", mi: "み", mu: "む", me: "め", mo: "も", mya: "みゃ", myu: "みゅ", myo: "みょ",
+      ya: "や", yu: "ゆ", yo: "よ",
+      ra: "ら", ri: "り", ru: "る", re: "れ", ro: "ろ", rya: "りゃ", ryu: "りゅ", ryo: "りょ",
+      wa: "わ", wo: "を", vu: "ゔ", "-": "ー",
+      xtu: "っ", ltu: "っ", xtsu: "っ", ltsu: "っ",
+    };
+    for (const v of "aiueo") { t["x" + v] = "ぁぃぅぇぉ"["aiueo".indexOf(v)]; t["l" + v] = t["x" + v]; }
+    return t;
+  })();
+  function romajiToKana(word) {
+    const s = word.toLowerCase();
+    let out = "";
+    let i = 0;
+    while (i < s.length) {
+      const c = s[i], next = s[i + 1] || "";
+      // 子音の重なりは促音（kitte → きって、matcha → まっちゃ）
+      if (c === next && /[bcdfghjkmpqrstvwxyz]/.test(c)) { out += "っ"; i++; continue; }
+      if (c === "t" && next === "c" && s[i + 2] === "h") { out += "っ"; i++; continue; }
+      // n の扱い: 母音・y が続けば な行（表で引く）。それ以外は「ん」。
+      // n' は区切り、nn は「ん」。ただし nn の後に母音が続けば ん＋な行
+      // （konnichiwa → こん|にち|わ。ヘボン式の書き方）。
+      if (c === "n" && !/[aiueoy]/.test(next)) {
+        out += "ん";
+        const after = s[i + 2] || "";
+        i += next === "'" || (next === "n" && !/[aiueoy]/.test(after)) ? 2 : 1;
+        continue;
+      }
+      let hit = false;
+      for (const len of [4, 3, 2, 1]) {
+        const k = s.slice(i, i + len);
+        if (k.length === len && ROMAJI[k]) { out += ROMAJI[k]; i += len; hit = true; break; }
+      }
+      if (!hit) return null;
+    }
+    return out;
+  }
+
+  // ローマ字の入力に「もしかして」を出す（置き換えはしない）。
+  // 変換結果がコーパスに実在する語のときだけ。英語として普通に使われている語
+  // （made → まで、take → たけ など）は、日本語側の頻度が十分に高くない限り提案しない。
+  function romajiSuggestion(query) {
+    if (!vocab || !/^[a-z' -]+$/i.test(query)) return null;
+    const out = [];
+    for (const w of query.toLowerCase().split(/\s+/).filter(Boolean)) {
+      const kana = romajiToKana(w);
+      if (!kana || kana.length < MIN_READING) return null;
+      // 「は」と書く助詞を wa と打つことが多い（konnichiwa → こんにちは）
+      const cands = [kana];
+      if (kana.endsWith("わ")) cands.push(kana.slice(0, -1) + "は");
+      let hit = null;
+      for (const c of cands) {
+        const e = vocab.byKey.get(c) || (vocab.byReading.get(c) || [])[0];
+        if (e) { hit = { t: vocab.byKey.has(c) ? e.t : c, n: e.n }; break; }
+      }
+      if (!hit) return null;
+      const latin = vocab.byKey.get(w);
+      if (latin && hit.n < latin.n * ROMAJI_RATIO) return null;
+      out.push(hit.t);
+    }
+    return out.length ? out.join(" ") : null;
+  }
+
+  // 1語を、それと同じものとして探す表記の組へ展開する。
+  //   term: 正規化済みの語  raw: 正規化前の入力（のばし棒の判定に使う）
+  //   spelling: 表記ゆれ（漢字⇔かな・のばし棒）  inflect: 活用形
+  // 返り値 norm: 照合に使う正規化済みの表記（先頭は入力そのもの）
+  //        display: 入力以外に含めた表記（画面に出す。語彙の表記そのまま）
+  function expandTerm(term, raw, { spelling = true, inflect = false } = {}) {
     const norm = [term];
     const display = [];
     if (!vocab) return { norm, display };
-    const add = (k, shown) => {
-      if (norm.length >= MAX_VARIANTS || norm.includes(k)) return;
+    const add = (k, shown, cap) => {
+      if (norm.length >= cap || norm.includes(k)) return;
       norm.push(k);
       display.push(shown);
     };
-    // かなで打たれたら、それ自体が読み。漢字なら語彙にある読みを引く。
-    const reads = isKana(term) ? [term] : vocab.readingsOf.get(term) || [];
-    for (const r of reads) {
-      if (r.length < MIN_READING) continue;
-      add(r, r);                                   // 「可愛い」→「かわいい」
-      for (const e of vocab.byReading.get(r) || []) add(e.k, e.t); // 「かわいい」→「可愛い」
+    if (spelling) {
+      const loose = looseForm(raw || term);
+      if (loose !== term && loose.length >= MIN_READING) add(loose, loose, MAX_VARIANTS);
+      for (const base of norm.slice()) {
+        // かなで打たれたら、それ自体が読み。漢字なら語彙にある読みを引く。
+        const reads = isKana(base) ? [base] : vocab.readingsOf.get(base) || [];
+        for (const r of reads) {
+          if (r.length < MIN_READING) continue;
+          add(r, r, MAX_VARIANTS);                                     // 可愛い → かわいい
+          for (const e of vocab.byReading.get(r) || []) add(e.k, e.t, MAX_VARIANTS); // かわいい → 可愛い
+        }
+      }
+    }
+    if (inflect) {
+      const cap = norm.length + MAX_INFLECTIONS;
+      for (const base of norm.slice()) {
+        for (const e of vocab.inflOf.get(base) || []) add(e.k, e.t, cap); // 楽しい → 楽しかった
+      }
     }
     return { norm, display };
   }
@@ -460,7 +592,10 @@ const Api = (function () {
   // 入力欄にフォーカスが来た時点で語彙を先読みする（1打鍵目から候補を出すため）
   function prefetch() { loadVocab(); }
 
-  return { mode: "static", search, context, facets, stats, suggest, prefetch };
+  return {
+    mode: "static", search, context, facets, stats, suggest, prefetch,
+    _internals: { romajiToKana, looseForm }, // テスト用（tests/test_client_js.py）
+  };
 })();
 
 window.Api = Api;

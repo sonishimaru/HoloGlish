@@ -39,14 +39,24 @@ eval(require("fs").readFileSync(process.argv[2], "utf8"));
 # 表記ゆれ展開の検証用に、読み付きの語彙を差し替える（フィクスチャは小さく、
 # 標本からの語彙抽出では足切りに掛かるため）。表記はフィクスチャ本文に実在する。
 VOCAB = {
-    "version": 2,
+    "version": 3,
     "items": [
         {"t": "今日", "n": 9, "r": ["きょう"]},
         {"t": "配信", "n": 9, "r": ["はいしん"]},
         {"t": "元気", "n": 9, "r": ["げんき"]},
+        # 英語の字幕に出てくる語（ローマ字の「もしかして」を出さない判定に使う）
+        {"t": "hello", "n": 9},
+        {"t": "made", "n": 9},
+        {"t": "まで", "n": 9},
         {"t": "おはよう", "n": 8},
+        {"t": "ありがとう", "n": 7},
         # 読み付け器ごとに読みが割れる語（短い方は誤読）。補完には長い方を見せる
         {"t": "可愛い", "n": 7, "r": ["かわい", "かわいい"]},
+        # 活用形と原形（本文: 今日も配信始めていきます / 最初の曲いきます）
+        {"t": "始めて", "n": 6, "b": "始める"},
+        {"t": "いきます", "n": 6, "b": "いく"},
+        {"t": "こんにちは", "n": 5},
+        {"t": "ペコラ", "n": 5},
     ],
 }
 
@@ -142,3 +152,88 @@ def test_suggest_matches_reading_prefix(site):
 def test_suggest_shows_the_longest_matching_reading(site):
     got = run(site, [["suggest", ["かわ"]]])[0]
     assert {"t": "可愛い", "reading": "かわいい"} in got
+
+
+
+def internals(base, fn, args):
+    """api.js の内部関数（純粋関数）を直接呼ぶ。"""
+    js = r"""
+globalThis.window = globalThis;
+window.HOLOGLISH_INDEX_BASE = process.argv[1];
+eval(require("fs").readFileSync(process.argv[2], "utf8"));
+const [fn, args] = JSON.parse(process.argv[3]);
+process.stdout.write(JSON.stringify(args.map((a) => window.Api._internals[fn](a))));
+"""
+    proc = subprocess.run(
+        [NODE, "-e", js, base, os.path.abspath(API_JS), json.dumps([fn, args], ensure_ascii=False)],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+# ---------- のばし棒・小書き文字 ----------
+
+def test_loose_form_drops_colloquial_lengthening(site):
+    got = internals(site, "looseForm", ["おはよー", "すごーーい", "すごぉい", "やばっ", "かわいー〜", "おはよう"])
+    assert got == ["おはよ", "すごい", "すごい", "やば", "かわい", "おはよう"]
+
+
+def test_loose_form_keeps_katakana_long_vowel(site):
+    # カタカナ語の「ー」は語の一部（外すと コーヒー → こひ で誤ヒットする）
+    assert internals(site, "looseForm", ["コーヒー", "ラーメン"]) == ["こーひー", "らーめん"]
+
+
+def test_long_vowel_query_reaches_standard_spelling(site):
+    """「おはよー」で、字幕に「おはよう」と書かれた発話が見つかる。"""
+    assert search(site, "おはよー")["total"] == 0
+    r = search(site, "おはよー", expand=True)
+    assert r["variants"] == [["おはよ"]]
+    assert r["total"] == search(site, "おはよ")["total"] == 3
+
+
+# ---------- 活用形 ----------
+
+def test_inflection_is_opt_in(site):
+    # 「始める」は本文に無い（「始めて」はある）。活用形を含めたときだけ届く
+    assert search(site, "始める", expand=True)["total"] == 0
+    r = search(site, "始める", expand=True, inflect=True)
+    assert r["total"] == 1
+    assert "始めて" in r["variants"][0]
+
+
+def test_inflection_works_without_spelling_variants(site):
+    # 表記ゆれを切っても活用形だけ広げられる（2つのチェックは独立）
+    r = search(site, "いく", inflect=True)
+    assert r["variants"] == [["いきます"]]
+    assert r["total"] == 2  # 始めていきます / 最初の曲いきます
+
+
+# ---------- ローマ字の「もしかして」 ----------
+
+def test_romaji_to_kana(site):
+    words = ["arigatou", "konnichiwa", "kitte", "matcha", "shinbun", "kon'ya", "onna",
+             "pekora", "otsukare", "ra-men", "hello"]
+    assert internals(site, "romajiToKana", words) == [
+        "ありがとう", "こんにちわ", "きって", "まっちゃ", "しんぶん", "こんや", "おんな",
+        "ぺこら", "おつかれ", "らーめん", None,
+    ]
+
+
+def test_romaji_query_gets_a_suggestion(site):
+    got = {q: search(site, q)["suggestion"] for q in ["ohayou", "arigatou", "konnichiwa", "pekora"]}
+    assert got == {
+        "ohayou": "おはよう",
+        "arigatou": "ありがとう",
+        "konnichiwa": "こんにちは",  # 助詞の「は」を wa と打つ
+        "pekora": "ペコラ",          # 語彙の表記で出す
+    }
+
+
+def test_english_words_get_no_suggestion(site):
+    # made はかなに綺麗に変換でき（まで）語彙にも実在するが、英語として使われている
+    # 語には、日本語側の頻度が十分に高くない限り出さない
+    assert internals(site, "romajiToKana", ["made"]) == ["まで"]  # 判定まで到達する前提の確認
+    assert search(site, "made")["suggestion"] is None
+    assert search(site, "hello")["suggestion"] is None  # そもそもかなにならない
+    assert search(site, "おはよう")["suggestion"] is None
