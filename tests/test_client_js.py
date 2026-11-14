@@ -48,6 +48,8 @@ VOCAB = {
         {"t": "hello", "n": 9},
         {"t": "made", "n": 9},
         {"t": "まで", "n": 9},
+        # 助詞が連なっただけの断片（nine → にね）。頻度が高くても提案しない
+        {"t": "にね", "n": 50, "f": 1},
         {"t": "おはよう", "n": 8},
         {"t": "ありがとう", "n": 7},
         # 読み付け器ごとに読みが割れる語（短い方は誤読）。補完には長い方を見せる
@@ -235,5 +237,11 @@ def test_english_words_get_no_suggestion(site):
     # 語には、日本語側の頻度が十分に高くない限り出さない
     assert internals(site, "romajiToKana", ["made"]) == ["まで"]  # 判定まで到達する前提の確認
     assert search(site, "made")["suggestion"] is None
+
+
+def test_fragments_get_no_suggestion(site):
+    # にね は語彙に実在し頻度も高いが、助詞で始まる断片なので「もしかして」にしない
+    assert internals(site, "romajiToKana", ["nine"]) == ["にね"]  # 判定まで到達する前提の確認
+    assert search(site, "nine")["suggestion"] is None
     assert search(site, "hello")["suggestion"] is None  # そもそもかなにならない
     assert search(site, "おはよう")["suggestion"] is None

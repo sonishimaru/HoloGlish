@@ -260,7 +260,7 @@ python -m http.server --directory site 8000
   - `manifest.json` … 版・**投稿日の新しい順の動画ID一覧**・動画別のメンバー/ブランチ・facets・stats
   - `uni/<k>.json.gz` `bi/<k>.json.gz` `tri/<k>.json.gz` … n-gram → `[group, mask, ...]`
   - `v/<video_id>.json.gz` … その動画のメタと発話
-  - `suggest.json.gz` … 入力補完・検索語の展開の語彙（実際に話されている言い回しと、漢字を含む語の読み `r`・活用形の原形 `b`）
+  - `suggest.json.gz` … 入力補完・検索語の展開の語彙（実際に話されている言い回しと、漢字を含む語の読み `r`・活用形の原形 `b`・断片の印 `f`）
 
   索引本体は gzip で書き出し、ブラウザ側で `DecompressionStream` により展開します
   （GitHub Pages のデプロイ容量の壁を避けるため。`manifest.json` と `coverage.json`
@@ -318,7 +318,9 @@ python -m http.server --directory site 8000
 - **ローマ字の「もしかして」**: `arigatou` `konnichiwa` のようにローマ字で打つと、
   変換したかなが語彙に実在するときだけ「もしかして: ありがとう」を出します
   （置き換えはしません）。`made`（→ まで）のように英語として普通に使われている語は、
-  日本語側の頻度が十分に高くない限り出しません。
+  日本語側の頻度が十分に高くない限り出しません。`nine`（→ にね）のように、変換結果が
+  助詞・助動詞で始まる語の断片にしかならない場合も出しません（語彙の各語に断片の印
+  `f` を付けて判定）。
 - 動画再生は従来どおり YouTube 公式 IFrame プレイヤー経由です。
 
 #### GitHub Pages で公開（自動）

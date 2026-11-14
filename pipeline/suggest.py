@@ -175,7 +175,7 @@ def build_suggestions(
     items = mine(sample, min_count=min_count, limit=limit)
     attach_annotations(items)
     return {
-        # 2: 漢字を含む語に読み r。3: 活用した語に原形 b。
+        # 2: 漢字を含む語に読み r。3: 活用した語に原形 b・断片の印 f。
         "version": 3,
         "sampled": len(sample),
         "min_count": min_count,
@@ -190,12 +190,14 @@ def attach_annotations(items: List[Dict[str, Any]]) -> Dict[str, int]:
       入力補完（「たの」→ 楽しい）と表記ゆれ展開（たのしい → 楽しい）に使う。
     - ``b``: 活用した語の原形（楽しかった → 楽しい）。
       「活用形も探す」で、原形の検索に活用形を含めるのに使う。
+    - ``f``: 助詞・助動詞などで始まる断片（って・にね）の印。
+      ローマ字の「もしかして」に断片を出さないのに使う（nine → にね を防ぐ）。
 
     依存（読み付け・形態素解析）が無い環境では何も付けない。
     """
-    from .readings import base_form, reading_list
+    from .readings import base_form, is_fragment, reading_list
 
-    counts = {"r": 0, "b": 0}
+    counts = {"r": 0, "b": 0, "f": 0}
     for it in items:
         r = reading_list(it["t"])
         if r:
@@ -205,4 +207,7 @@ def attach_annotations(items: List[Dict[str, Any]]) -> Dict[str, int]:
         if b:
             it["b"] = b
             counts["b"] += 1
+        if is_fragment(it["t"]):
+            it["f"] = 1
+            counts["f"] += 1
     return counts

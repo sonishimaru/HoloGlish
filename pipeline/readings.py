@@ -166,3 +166,24 @@ def base_form(text: str) -> Optional[str]:
     if len(nb) < 2 or nb in nt:
         return None
     return base
+
+
+# 語の頭に来ない品詞。補完語彙はコーパスの文字 n-gram から作るので、語の途中や
+# 助詞の連なり（って・ちゃ・にね）から始まる断片も混じる。
+_FUNCTION_HEADS = ("助詞", "助動詞", "記号", "補助記号", "接尾辞")
+
+
+def is_fragment(text: str) -> bool:
+    """助詞・助動詞などで始まる、語として独り立ちしない断片か。
+
+    ローマ字の「もしかして」に断片を出さないために使う（nine → にね を防ぐ）。
+    解析器が無ければ判定できないので False（断片扱いしない）。
+    """
+    tagger = _tagger()
+    if tagger is None or not text or text.isascii():
+        return False
+    try:
+        toks = list(tagger(text))
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(toks) and toks[0].feature.pos1 in _FUNCTION_HEADS

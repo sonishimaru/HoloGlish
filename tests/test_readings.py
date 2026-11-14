@@ -68,3 +68,14 @@ def test_base_form_of_inflected_words(word, base):
 ])
 def test_base_form_is_none_for_non_inflections(word):
     assert readings.base_form(word) is None
+
+
+@pytest.mark.parametrize("word", ["にね", "って", "ちゃ", "った"])
+def test_function_word_led_items_are_fragments(word):
+    # 助詞・助動詞で始まる断片。ローマ字の「もしかして」に出さない（nine → にね）
+    assert readings.is_fragment(word)
+
+
+@pytest.mark.parametrize("word", ["ため", "きて", "ありがとう", "ございます", "こんにちは", "ペコラ", "hello", ""])
+def test_real_words_are_not_fragments(word):
+    assert not readings.is_fragment(word)

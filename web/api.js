@@ -408,7 +408,11 @@ const Api = (function () {
         await load(); // 拡張子の判定に manifest が要る
         const data = await fetchJson(`${BASE}/suggest${ext()}`);
         for (const it of data.items || []) {
-          const e = { t: it.t, k: normalizeText(it.t), n: it.n || 0, r: (it.r || []).map(normalizeText) };
+          const e = {
+            t: it.t, k: normalizeText(it.t), n: it.n || 0,
+            r: (it.r || []).map(normalizeText),
+            frag: !!it.f, // 助詞などで始まる断片（って・にね）
+          };
           list.push(e);
           if (!byKey.has(e.k)) byKey.set(e.k, e);
           if (e.r.length) readingsOf.set(e.k, e.r);
@@ -507,7 +511,8 @@ const Api = (function () {
   }
 
   // ローマ字の入力に「もしかして」を出す（置き換えはしない）。
-  // 変換結果がコーパスに実在する語のときだけ。英語として普通に使われている語
+  // 変換結果がコーパスに実在する語のときだけ。語の断片（nine → にね）は除く。
+  // 英語として普通に使われている語
   // （made → まで、take → たけ など）は、日本語側の頻度が十分に高くない限り提案しない。
   function romajiSuggestion(query) {
     if (!vocab || !/^[a-z' -]+$/i.test(query)) return null;
@@ -520,8 +525,11 @@ const Api = (function () {
       if (kana.endsWith("わ")) cands.push(kana.slice(0, -1) + "は");
       let hit = null;
       for (const c of cands) {
-        const e = vocab.byKey.get(c) || (vocab.byReading.get(c) || [])[0];
-        if (e) { hit = { t: vocab.byKey.has(c) ? e.t : c, n: e.n }; break; }
+        const own = vocab.byKey.get(c);
+        if (own && !own.frag) { hit = { t: own.t, n: own.n }; break; }
+        // かな表記が語彙に無くても、その読みを持つ漢字の語があれば（tanoshii → 楽しい）
+        const kanji = (vocab.byReading.get(c) || [])[0];
+        if (kanji) { hit = { t: c, n: kanji.n }; break; }
       }
       if (!hit) return null;
       const latin = vocab.byKey.get(w);
