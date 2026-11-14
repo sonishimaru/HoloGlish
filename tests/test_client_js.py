@@ -83,6 +83,24 @@ def site(built_db, tmp_path):
     srv.shutdown()
 
 
+@pytest.fixture
+def site_many_buckets(built_db, tmp_path, monkeypatch):
+    """索引を極端に細かく分けて書き出したサイト（バケット単位の取得を検証する）。"""
+    monkeypatch.setattr(export_static, "BUCKET_TARGET_BYTES", 1)
+    out = str(tmp_path / "site_many")
+    conn = db.connect(built_db)
+    export_static.export_site(conn, out)
+    conn.close()
+    handler = functools.partial(
+        type("Quiet", (http.server.SimpleHTTPRequestHandler,), {"log_message": lambda *a: None}),
+        directory=out,
+    )
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{srv.server_address[1]}/static/idx", out
+    srv.shutdown()
+
+
 def run(base, calls):
     proc = subprocess.run(
         [NODE, "-e", RUNNER, base, os.path.abspath(API_JS), json.dumps(calls, ensure_ascii=False)],
@@ -260,3 +278,17 @@ def test_minimal_cover_keeps_results_identical(site):
     r = search(site, "おはよー", expand=True)
     assert r["variants"] == [["おはよ"]]
     assert r["total"] == search(site, "おはよ")["total"] == 3
+
+
+
+def test_results_do_not_depend_on_bucket_count(site_many_buckets, built_db):
+    """分割数をデータ量で変えても、実物の api.js の検索結果はサーバ検索と一致する。"""
+    from server import search as server
+
+    base, out = site_many_buckets
+    man = json.load(open(os.path.join(out, "static", "idx", "manifest.json"), encoding="utf-8"))
+    assert man["tri_buckets"] > export_static.MIN_BUCKETS  # 本当に細かく分かれている前提の確認
+    conn = db.connect(built_db)
+    for q in ["おはよう", "今日", "配信", "ぺこ", "hello", "おはよう 元気"]:
+        assert search(base, q)["total"] == server.search(conn, q, page_size=100)["total"], q
+    conn.close()

@@ -44,7 +44,12 @@ def test_export_site_structure(built_db, tmp_path):
     assert manifest["stats"]["videos"] == info["videos"]
     assert "members" in manifest["facets"]
     assert manifest["mask_group"] == export_static.MASK_GROUP
-    assert manifest["tri_buckets"] == export_static.TRI_BUCKETS
+    # 分割数はデータ量から決まる（小さなフィクスチャでは最小値）
+    for kind in ("uni", "bi", "tri"):
+        n = manifest[f"{kind}_buckets"]
+        assert n >= export_static.MIN_BUCKETS and n & (n - 1) == 0, (kind, n)  # 2の冪
+        assert len(os.listdir(os.path.join(idx, kind))) == n, kind
+        assert info["buckets"][kind]["buckets"] == n
     assert len(manifest["vids"]) == manifest["videos"]
     assert len(manifest["vmem"]) == manifest["videos"]
     assert len(manifest["vbr"]) == manifest["videos"]
@@ -103,11 +108,9 @@ def test_gram_buckets_partition_whole_index(built_db, tmp_path):
     conn.close()
     idx_dir = os.path.join(out, "static", "idx")
 
-    for sub, key, buckets in (
-        ("uni", "uni_index", export_static.UNI_BUCKETS),
-        ("bi", "bi_index", export_static.BI_BUCKETS),
-        ("tri", "tri_index", export_static.TRI_BUCKETS),
-    ):
+    man = idx["manifest"]
+    for sub, key in (("uni", "uni_index"), ("bi", "bi_index"), ("tri", "tri_index")):
+        buckets = man[f"{sub}_buckets"]
         merged = {}
         for k in range(buckets):
             part = _load(os.path.join(idx_dir, sub, f"{k}.json.gz"))
@@ -280,3 +283,18 @@ def test_suggestion_prefix_lookup_finds_the_phrase(built_db, tmp_path):
     keys = [normalize(it["t"]) for it in
             _load(os.path.join(out, "static", "idx", "suggest.json.gz"))["items"]]
     assert any(k.startswith(normalize("おは")) for k in keys), keys
+
+
+
+def test_bucket_count_tracks_data_size():
+    """1バケットが目標以下になる最小の2の冪。データが増えれば分割も増える。"""
+    bc = export_static.bucket_count
+    per = export_static.BUCKET_TARGET_BYTES / export_static.GZ_BYTES_PER_INT["tri"]
+    assert bc(0, "tri") == export_static.MIN_BUCKETS
+    assert bc(int(per * 8), "tri") == 8                # ちょうど目標 × 8 → 8 で足りる
+    assert bc(int(per * 8) + 1000, "tri") == 16        # 少しでも超えたら倍に
+    # 本番データ（2026-11）の規模: tri の整数 約6.7億 → 32,768（1バケット ~40KB）
+    assert bc(670_000_000, "tri") == 32768
+    assert bc(174_000_000, "bi") == 8192
+    assert bc(9_200_000, "uni") == 512
+    assert bc(10**13, "tri") == export_static.MAX_BUCKETS  # 上限で止まる
