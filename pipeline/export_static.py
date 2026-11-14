@@ -56,19 +56,35 @@ _ASSETS = ["app.js", "api.js", "style.css"]
 # マスク1つが受け持つ動画数。JS のビット演算は 32bit 符号付きなので 30 未満に保つ。
 MASK_GROUP = 24
 
-# n-gram 索引の分割数。1バケット = 全語彙 / この数。
-# 検索1回で必ず読むので、実データ(777万発話・異なりトリグラム298万)で
-# 1バケットが 30KB台(gzip) に収まる値にしてある。分割を増やしてもファイル数が
-# 増えるだけで総量は変わらない（取得するのはクエリに出てくる gram のバケットだけ）。
-UNI_BUCKETS = 64
-BI_BUCKETS = 512
-TRI_BUCKETS = 2048
+# n-gram 索引の分割数は、書き出すたびにデータ量から決める。
+# 検索1回で、クエリに出てくる gram のバケットを必ず取得する。以前は分割数を固定
+# （uni 64 / bi 512 / tri 2048。777万発話で 1バケット 30KB 台になる値）にしていたが、
+# データが 1.46億発話に増えて 1バケット ~630KB（約20倍）に膨らみ、3文字以上の
+# 検索は動画を読む前に索引だけで 0.6〜1.9MB を取っていた。
+# 分割を増やしてもファイル数が増えるだけで総量は変わらないので、1バケットが
+# BUCKET_TARGET_BYTES 以下になる最小の2の冪を選ぶ（manifest に書き、api.js はそれを読む）。
+BUCKET_TARGET_BYTES = 64 * 1024
+# gzip 後の「postings の整数1個あたり」のバイト数（キーの分も平均に含む）。
+# 本番データ（2026-11、57,998本）の公開バケットで実測: uni 2.32 / bi 1.97 / tri 1.98。
+# 整数の桁数でほぼ決まるので安定している。外れても1バケットの大きさが倍か半分になるだけ。
+GZ_BYTES_PER_INT = {"uni": 2.3, "bi": 2.0, "tri": 2.0}
+MIN_BUCKETS = 8
+MAX_BUCKETS = 1 << 17  # 安全上限（131,072）
 
 INDEX_VERSION = 5
 
 
 def _ngrams(text: str, n: int) -> Set[str]:
     return {text[i : i + n] for i in range(len(text) - n + 1)} if len(text) >= n else set()
+
+
+def bucket_count(total_ints: int, kind: str) -> int:
+    """postings の総整数数から、1バケットが目標以下になる最小の2の冪を返す。"""
+    est = total_ints * GZ_BYTES_PER_INT[kind]
+    n = MIN_BUCKETS
+    while n < MAX_BUCKETS and est / n > BUCKET_TARGET_BYTES:
+        n *= 2
+    return n
 
 
 def gram_bucket(gram: str, buckets: int) -> int:
@@ -172,6 +188,12 @@ def _build_index(
         if on_video is not None:
             on_video(vid, {"meta": videos[vid], "segs": segs})
 
+    # 分割数はデータ量で決める（モジュール先頭の BUCKET_TARGET_BYTES 参照）
+    counts = {
+        kind: bucket_count(sum(len(a) for a in index.values()), kind)
+        for kind, index in (("uni", uni), ("bi", bi), ("tri", tri))
+    }
+
     manifest = {
         "version": INDEX_VERSION,
         # 索引ファイル（uni/bi/tri・v・suggest）は gzip 配信（.json.gz）。
@@ -180,9 +202,9 @@ def _build_index(
         "videos": len(vids),
         "segments": seg_total,
         "mask_group": MASK_GROUP,
-        "uni_buckets": UNI_BUCKETS,
-        "bi_buckets": BI_BUCKETS,
-        "tri_buckets": TRI_BUCKETS,
+        "uni_buckets": counts["uni"],
+        "bi_buckets": counts["bi"],
+        "tri_buckets": counts["tri"],
         # 新しい順の動画ID。索引の group/mask はこの並びの位置を指す。
         "vids": vids,
         # 絞り込みを索引段階で効かせるための動画別メンバー/ブランチ（facets 内の位置）
@@ -279,17 +301,28 @@ def export_site(conn: sqlite3.Connection, out_dir: str) -> Dict[str, Any]:
 
     _dump(os.path.join(idx_dir, "manifest.json"), idx["manifest"])
 
-    # n-gram 索引はバケット分割して書き出す（検索時に必要なバケットだけ取得する）
-    for sub, index, buckets in (
-        ("uni", idx["uni_index"], UNI_BUCKETS),
-        ("bi", idx["bi_index"], BI_BUCKETS),
-        ("tri", idx["tri_index"], TRI_BUCKETS),
-    ):
+    # n-gram 索引はバケット分割して書き出す（検索時に必要なバケットだけ取得する）。
+    # 分割数は manifest に入っている（データ量から決めた値）。
+    man = idx["manifest"]
+    bucket_stats: Dict[str, Dict[str, int]] = {}
+    for sub in ("uni", "bi", "tri"):
+        buckets = man[f"{sub}_buckets"]
         sub_dir = os.path.join(idx_dir, sub)
         os.makedirs(sub_dir, exist_ok=True)
-        parts = _split_grams(index, buckets)
+        parts = _split_grams(idx[f"{sub}_index"], buckets)
+        sizes = []
         for k in range(buckets):
-            _dump_gz(os.path.join(sub_dir, f"{k}.json.gz"), parts.get(k, {}))
+            path = os.path.join(sub_dir, f"{k}.json.gz")
+            _dump_gz(path, parts.get(k, {}))
+            sizes.append(os.path.getsize(path))
+        del parts
+        sizes.sort()
+        bucket_stats[sub] = {
+            "buckets": buckets, "median_bytes": sizes[len(sizes) // 2], "max_bytes": sizes[-1],
+        }
+        # 見積もりが外れて膨らんでいないか、ビルドのログで追えるようにする
+        print(f"  索引 {sub}: {buckets} バケット / 中央値 {sizes[len(sizes) // 2] // 1024}KB"
+              f" / 最大 {sizes[-1] // 1024}KB（目標 {BUCKET_TARGET_BYTES // 1024}KB 以下）")
 
     # 入力補完の候補語彙。「何を検索できるか」が分からない状態を避けるため、
     # 実際に話されている言い回しだけを候補にする（選べば必ずヒットする）。
@@ -313,4 +346,5 @@ def export_site(conn: sqlite3.Connection, out_dir: str) -> Dict[str, Any]:
         "segments": stats["segments"],
         "members": stats["members"],
         "shards": idx["manifest"]["videos"],  # 互換: 出力単位の数（動画数）
+        "buckets": bucket_stats,
     }
