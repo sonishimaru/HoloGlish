@@ -1,0 +1,6 @@
+# 静的サイトの書き出し（pages.yml）専用の依存。収集（requirements.txt）には入れない。
+PyYAML>=6.0
+# 表記ゆれ（漢字⇔かな）を束ねるための読み付け（pipeline/readings.py）。
+# 2方式を併用する: MeCab+UniDic は送り仮名に強く、pykakasi は代表的な読みに強い。
+pykakasi>=2.3,<3
+fugashi[unidic-lite]>=1.3,<2

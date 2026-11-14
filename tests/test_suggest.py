@@ -88,7 +88,7 @@ def test_limit_caps_the_vocabulary():
 def test_build_suggestions_samples_large_corpora():
     texts = CORPUS * 200  # 2000 発話
     built = suggest.build_suggestions(texts, sample_max=100)
-    assert built["version"] == 1
+    assert built["version"] == 2  # 2: 漢字を含む語に読み r が付く
     assert built["sampled"] <= 100
     assert built["items"], "標本からでも候補は取れる"
 
@@ -98,3 +98,13 @@ def test_build_suggestions_keeps_small_corpora_whole():
     assert built["sampled"] == len(CORPUS)
     assert built["min_count"] == 3  # 小さなコーパスでも候補が出る足切り
     assert "おはようございます" in _words(built["items"])
+
+
+def test_kanji_items_carry_readings():
+    """漢字を含む候補には読みが付き、仮名だけの候補には付かない（展開の土台）。"""
+    built = suggest.build_suggestions(CORPUS)
+    by_t = {it["t"]: it for it in built["items"]}
+    assert by_t["配信"]["r"] == ["はいしん"]
+    assert by_t["今日"]["r"]  # きょう（と辞書によっては こんにち）
+    assert "r" not in by_t["おはようございます"]
+    assert "r" not in by_t["コラボ"]  # カタカナは正規化でひらがなに畳まれるので不要

@@ -31,6 +31,11 @@
         <option value="date">新着順</option>
         <option value="relevance">一致度順</option>
       </select>
+      <!-- 自動字幕は「楽しい」「可愛い」のように漢字で書くことが多く、かなで打つと
+           大半を取りこぼす。読みが同じ表記もまとめて探す（既定 ON） -->
+      <label class="toggle" title="「たのしい」で「楽しい」も、「可愛い」で「かわいい」も探します">
+        <input id="f-variants" type="checkbox" checked /> 漢字・かなの表記ゆれも探す
+      </label>
     </div>
 
     <div id="status" class="status" role="status" aria-live="polite"></div>

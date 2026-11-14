@@ -24,6 +24,8 @@ const state = {
   ctxToken: 0,
   pendingClip: null, // 共有リンクで指定された用例 {v, t}
   searchToken: 0,    // 検索の世代。古い検索の結果・進捗を捨てるのに使う
+  expand: true,      // 表記ゆれ（漢字⇔かな）も含めて探すか
+  variants: [],      // 語ごとに、入力以外に含めた表記（ハイライト・表示用）
 };
 
 const $ = (id) => document.getElementById(id);
@@ -166,11 +168,16 @@ function goPrev() {
 
 // ---------- レンダリング ----------
 // クエリ語の全出現箇所をハイライト（大小文字無視）
-function highlight(text, q) {
-  if (!q) return escapeHtml(text);
-  // 空白区切りの各語をハイライト（複数語検索に対応）。正規化の影響で生テキストに
-  // 出現しない語はハイライトされないが、結果自体は正しく表示される。
-  const needles = q.trim().split(/\s+/).map((s) => s.toLowerCase()).filter(Boolean);
+// ハイライトする語: 入力した各語 + 表記ゆれで含めた表記（「たのしい」なら「楽しい」も）
+function hlNeedles() {
+  const words = (state.query || "").trim().split(/\s+/).filter(Boolean);
+  return words.concat(...(state.variants || []));
+}
+
+function highlight(text, needles) {
+  // 正規化の影響で生テキストに出現しない語はハイライトされないが、結果自体は正しい。
+  needles = (needles || []).map((s) => s.toLowerCase()).filter(Boolean);
+  if (!needles.length) return escapeHtml(text);
   const lower = text.toLowerCase();
   let out = "";
   let i = 0;
@@ -178,7 +185,10 @@ function highlight(text, q) {
     let best = -1, blen = 0;
     for (const nd of needles) {
       const hit = lower.indexOf(nd, i);
-      if (hit >= 0 && (best < 0 || hit < best)) { best = hit; blen = nd.length; }
+      // 同じ位置なら長い方（「楽しい」と「楽」なら「楽しい」）
+      if (hit >= 0 && (best < 0 || hit < best || (hit === best && nd.length > blen))) {
+        best = hit; blen = nd.length;
+      }
     }
     if (best < 0) { out += escapeHtml(text.slice(i)); break; }
     out += escapeHtml(text.slice(i, best));
@@ -246,7 +256,7 @@ function renderResults() {
           <span class="badge">${escapeHtml(r.branch || "")}</span>
           <span class="badge">${escapeHtml(r.sub_kind || "")}</span>
         </div>
-        <div class="snippet">${highlight(r.snippet || r.text || "", state.query)}</div>
+        <div class="snippet">${highlight(r.snippet || r.text || "", hlNeedles())}</div>
       </div>`;
     li.addEventListener("click", () => { state.index = i; playCurrent(); });
     ul.appendChild(li);
@@ -266,7 +276,7 @@ function renderNowPlaying(r) {
     `<span class="tag">${escapeHtml(r.branch || "")}</span>` +
     `<span class="tag">${escapeHtml(r.lang || "")}</span>`;
   $("now-title").textContent = r.title || "";
-  $("now-caption").innerHTML = highlight(r.text || "", state.query);
+  $("now-caption").innerHTML = highlight(r.text || "", hlNeedles());
   $("counter").textContent = `${state.index + 1} / ${state.results.length}（全 ${totalLabel()}）`;
   $("prev-btn").disabled = state.index <= 0;
 }
@@ -283,7 +293,7 @@ async function loadContext(r) {
       const li = document.createElement("li");
       li.className = "ctx-line" + (s.is_current ? " current" : "");
       li.innerHTML = `<span class="ctx-t">${fmtTime(s.start)}</span>` +
-        `<span class="ctx-x">${highlight(s.text || "", state.query)}</span>`;
+        `<span class="ctx-x">${highlight(s.text || "", hlNeedles())}</span>`;
       li.addEventListener("click", () => {
         if (state.playerReady) {
           state.player.seekTo(Math.max(0, Math.floor(s.start)), true);
@@ -293,6 +303,12 @@ async function loadContext(r) {
       box.appendChild(li);
     });
   } catch (_) { /* 文脈は補助情報なので失敗しても本体は動く */ }
+}
+
+// 表記ゆれで含めた表記を明示する（何を探したのかが見えないと結果を信用できない）
+function variantsLabel() {
+  const shown = [...new Set((state.variants || []).flat())];
+  return shown.length ? `（${shown.join("・")} も含む）` : "";
 }
 
 // 打ち切って返した場合、total は下限なので「N+ 件」と表す
@@ -332,6 +348,7 @@ function writeHash(includeClip = true) {
   if (member) p.set("member", member);
   if (lang) p.set("lang", lang);
   if (state.sort && state.sort !== "date") p.set("sort", state.sort);
+  if (!state.expand) p.set("nv", "1"); // 表記ゆれを含めない（既定は含める）
   const r = includeClip ? state.results[state.index] : null;
   if (r) {
     p.set("v", r.video_id);
@@ -354,6 +371,7 @@ function readHash() {
     v: p.get("v") || "",
     t: p.get("t") || "",
     clip: p.get("clip") === "1",
+    expand: p.get("nv") !== "1",
   };
 }
 
@@ -379,7 +397,7 @@ async function loadPage(page, playFirst = false) {
   try {
     data = await Api.search({
       q: state.query, page, page_size: state.pageSize,
-      branch, member, lang, sort: state.sort,
+      branch, member, lang, sort: state.sort, expand: state.expand,
     }, (p) => { if (fresh()) $("status").textContent = progressLabel(p); });
   } catch (_) {
     if (!fresh()) return;
@@ -392,14 +410,15 @@ async function loadPage(page, playFirst = false) {
   setSearching(false);
 
   state.results = data.results || [];
+  state.variants = data.variants || [];
   state.total = data.total || 0;
   state.partial = !!data.partial;
   state.page = data.page || page;
   state.index = -1;
 
   $("status").textContent = state.total
-    ? `「${state.query}」の用例: ${totalLabel()}`
-    : `「${state.query}」は見つかりませんでした`;
+    ? `「${state.query}」の用例: ${totalLabel()}${variantsLabel()}`
+    : `「${state.query}」は見つかりませんでした${variantsLabel()}`;
 
   renderResults();
   renderPager();
@@ -539,7 +558,7 @@ function markActiveSuggest() {
 function chooseSuggest(i) {
   const word = ac.items[i];
   if (!word) return;
-  $("q").value = word;
+  $("q").value = word.t;
   closeSuggest();
   doSearch();
 }
@@ -556,7 +575,14 @@ function renderSuggest(items) {
     li.className = "ac-item";
     li.setAttribute("role", "option");
     li.setAttribute("aria-selected", "false");
-    li.textContent = w;
+    li.textContent = w.t;
+    // 読みで当たった候補は読みを添える（「たの」→ 楽しい たのしい）
+    if (w.reading) {
+      const rd = document.createElement("span");
+      rd.className = "ac-reading";
+      rd.textContent = w.reading;
+      li.appendChild(rd);
+    }
     // blur より先に拾う（クリックしたときに候補が閉じて空振りしないように）
     li.addEventListener("mousedown", (e) => { e.preventDefault(); chooseSuggest(i); });
     box.appendChild(li);
@@ -653,6 +679,12 @@ function onKey(e) {
 function init() {
   const h = readHash();
   if (h.sort === "relevance") { state.sort = "relevance"; $("f-sort").value = "relevance"; }
+  state.expand = h.expand;
+  $("f-variants").checked = state.expand;
+  $("f-variants").addEventListener("change", () => {
+    state.expand = $("f-variants").checked;
+    if (state.query) loadPage(1, true); else writeHash(false);
+  });
 
   $("search-form").addEventListener("submit", doSearch);
   $("next-btn").addEventListener("click", goNext);
@@ -663,7 +695,10 @@ function init() {
   $("share-btn").addEventListener("click", shareCurrent);
   $("recent-clear").addEventListener("click", clearRecent);
   $("q").addEventListener("input", scheduleSuggest);
-  $("q").addEventListener("focus", scheduleSuggest);
+  $("q").addEventListener("focus", () => {
+    if (Api.prefetch) Api.prefetch(); // 1打鍵目から候補を出せるよう語彙を先読み
+    scheduleSuggest();
+  });
   $("q").addEventListener("keydown", onSuggestKey);
   $("q").addEventListener("blur", closeSuggest);
   $("speed").addEventListener("change", () => {

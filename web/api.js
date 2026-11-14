@@ -37,8 +37,10 @@ const Api = (function () {
       async context(p) { return (await fetch(`/api/context?${qs(p)}`)).json(); },
       async facets() { return (await fetch("/api/facets")).json(); },
       async stats() { return (await fetch("/api/stats")).json(); },
-      // 入力補完の語彙は静的索引の生成物（suggest.json）なのでサーバモードでは持たない
+      // 入力補完・表記ゆれ展開の語彙は静的索引の生成物（suggest.json）なので
+      // サーバモードでは持たない（検索は表記どおりの一致で動く）
       async suggest() { return []; },
+      prefetch() {},
     };
   }
 
@@ -144,9 +146,9 @@ const Api = (function () {
   }
   const getVideos = (list) => Promise.all(list.map(getVideo));
 
-  function snippet(text, terms, radius = 40) {
+  function snippet(text, needles, radius = 40) {
     const lower = text.toLowerCase();
-    for (const t of terms) {
+    for (const t of needles) {
       const i = lower.indexOf(t);
       if (i >= 0) {
         const start = Math.max(0, i - radius);
@@ -173,6 +175,19 @@ const Api = (function () {
       if (v) out.set(g, v);
     }
     return out;
+  }
+
+  // グループごとにマスクを OR（どちらかに在ればよい。表記ゆれの束ね用）
+  function orMasks(a, b) {
+    const out = new Map(a);
+    for (const [g, m] of b) out.set(g, (out.get(g) || 0) | m);
+    return out;
+  }
+
+  // 表記ゆれの組（例: [たのしい, 楽しい]）のどれかを含む動画のマスク
+  async function groupMasks(variants) {
+    const all = await Promise.all(variants.map(termMasks));
+    return all.reduce((acc, m) => orMasks(acc, m), new Map());
   }
 
   // 1語を含む動画のマスク（null は「この語では絞れない」＝該当なしと区別する）
@@ -219,26 +234,27 @@ const Api = (function () {
     return out;
   }
 
-  function scanVideo(v, vi, terms, f, hits) {
+  // groups: 語ごとの表記ゆれの組。語どうしは AND、組の中は OR。
+  function scanVideo(v, vi, groups, f, hits) {
     const segs = v.segs, norms = v.norms;
     for (let si = 0; si < segs.length; si++) {
       if (f.lang && segs[si][3] !== f.lang) continue;
       const nt = norms[si];
-      if (terms.every((t) => nt.includes(t))) hits.push({ vi, si });
+      if (groups.every((g) => g.some((t) => nt.includes(t)))) hits.push({ vi, si });
     }
   }
 
   // 候補動画を新しい順に見て、必要件数が埋まったら打ち切る。
   // 返り値 partial:true は「まだ先に一致があり得る（total は下限）」の意。
   // onProgress は取得の進み具合を逐次通知する（画面を止めて見せないため）。
-  async function collectHits(terms, f, needed, sort, onProgress) {
+  async function collectHits(groups, f, needed, sort, onProgress) {
     const notify = (phase, candidates, scanned, hits) => {
       if (onProgress) onProgress({ phase, candidates, scanned, hits });
     };
     notify("index", 0, 0, 0);
     let masks = null;
-    for (const term of terms) {
-      const m = await termMasks(term);
+    for (const group of groups) {
+      const m = await groupMasks(group);
       masks = masks === null ? m : andMasks(masks, m);
       if (masks.size === 0) break;
     }
@@ -255,7 +271,7 @@ const Api = (function () {
     while (scanned < limit) {
       const batch = cands.slice(scanned, Math.min(scanned + size, limit));
       const loaded = await getVideos(batch);
-      batch.forEach((vi, k) => scanVideo(loaded[k], vi, terms, f, hits));
+      batch.forEach((vi, k) => scanVideo(loaded[k], vi, groups, f, hits));
       scanned += batch.length;
       notify("scan", cands.length, scanned, hits.length);
       if (hits.length >= want) break;
@@ -268,38 +284,48 @@ const Api = (function () {
     return { hits, partial: scanned < cands.length, candidates: cands.length };
   }
 
-  function toResult(vi, si, terms) {
+  function toResult(vi, si, needles) {
     const v = videoCache.get(vi);
     const meta = v.meta, seg = v.segs[si];
     return {
       video_id: manifest.vids[vi], member: meta.member, member_ja: meta.member_ja || "",
       branch: meta.branch, title: meta.title, url: meta.url, lang: seg[3],
       sub_kind: meta.sub_kind, start: seg[0], dur: seg[1], text: seg[2],
-      snippet: snippet(seg[2], terms),
+      snippet: snippet(seg[2], needles),
     };
   }
 
   async function search(p, onProgress) {
     if (onProgress) onProgress({ phase: "index", candidates: 0, scanned: 0, hits: 0 });
-    await load();
+    const expand = !!p.expand;
+    // 展開には語彙が要る。manifest と並行して取りに行く（直列にしない）
+    await Promise.all([load(), expand ? loadVocab() : null]);
     const query = (p.q || "").trim();
     const sort = p.sort === "relevance" ? "relevance" : "date";
     const page = Math.max(1, parseInt(p.page || 1, 10));
     const pageSize = Math.min(Math.max(parseInt(p.page_size || 20, 10), 1), 100);
     const terms = queryTerms(query);
     if (!query || !terms.length) {
-      return { query, page, page_size: pageSize, total: 0, sort, partial: false, results: [] };
+      return { query, page, page_size: pageSize, total: 0, sort, partial: false, results: [], variants: [] };
     }
+    // 語ごとに表記ゆれの組へ展開（展開しないときは自分だけの組）
+    const expanded = terms.map((t) => (expand ? expandTerm(t) : { norm: [t], display: [] }));
+    const groups = expanded.map((e) => e.norm);
+    // スニペットの切り出し位置: 生テキストに現れる表記（「楽しい」）も探す
+    const needles = [...new Set(groups.flat().concat(expanded.flatMap((e) => e.display.map((d) => d.toLowerCase()))))];
 
     const f = { member: p.member || "", branch: p.branch || "", lang: p.lang || "" };
     // そのページを埋めるのに必要な件数（+1 で「まだ先がある」を判定できる）
     const needed = page * pageSize + 1;
-    const { hits, partial } = await collectHits(terms, f, needed, sort, onProgress);
+    const { hits, partial } = await collectHits(groups, f, needed, sort, onProgress);
 
     const nt = (h) => videoCache.get(h.vi).norms[h.si];
     if (sort === "relevance") {
       // 自然な並び: 語が早く現れる → 発話が短い（語が目立つ）→ 新しい
-      const pos = (h) => { const i = nt(h).indexOf(terms[0]); return i < 0 ? 1e9 : i; };
+      const pos = (h) => {
+        const ix = groups[0].map((t) => nt(h).indexOf(t)).filter((i) => i >= 0);
+        return ix.length ? Math.min(...ix) : 1e9;
+      };
       hits.sort((a, b) =>
         pos(a) - pos(b) || nt(a).length - nt(b).length || a.vi - b.vi);
     } else {
@@ -311,9 +337,13 @@ const Api = (function () {
 
     const total = hits.length;
     const results = hits.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize)
-      .map((h) => toResult(h.vi, h.si, terms));
+      .map((h) => toResult(h.vi, h.si, needles));
     // partial のとき total は下限（打ち切ったので、まだ先に一致があり得る）
-    return { query, page, page_size: pageSize, total, sort, partial, results };
+    // variants: 語ごとに「入力した表記以外に含めた表記」（画面で明示・ハイライトに使う）
+    return {
+      query, page, page_size: pageSize, total, sort, partial, results,
+      variants: expanded.map((e) => e.display),
+    };
   }
 
   async function context(p) {
@@ -341,34 +371,96 @@ const Api = (function () {
   async function facets() { await load(); return manifest.facets; }
   async function stats() { await load(); return manifest.stats; }
 
-  // ---------- 入力補完 ----------
-  // suggest.json は「実際に話されている言い回し」だけを頻度順に並べたもの。
-  // 初回の入力時にだけ取りに行き（起動を遅らせない）、以後はメモリ上で前方一致。
-  // 照合は検索と同じ正規化を通すので、カナ/かな・全角/半角の違いを吸収する。
-  let suggestList = null;
-  async function suggest(prefix, limit = 8) {
-    const key = normalizeText(prefix || "");
-    if (!key) return [];
-    if (!suggestList) {
+  // ---------- 語彙（入力補完・表記ゆれ展開の共通の土台） ----------
+  // suggest.json は「実際に話されている言い回し」を頻度順に並べたもの。漢字を含む語には
+  // 読み r（ひらがな）が付いている。これを2通りに使う:
+  //  - 入力補完: 表記の前方一致に加え、読みの前方一致（「たの」→「楽しい」）。
+  //  - 表記ゆれ展開: 「たのしい」で検索すると「楽しい」も含めて探す。
+  //    自動字幕は漢字で書くことが多く、かなで打つと大半を取りこぼすため
+  //    （実データ: たのしい 72本 / 楽しい 26,570本）。
+  // 展開先はコーパスに実在する表記だけなので、展開しても空振りはしない。
+  const MAX_VARIANTS = 8;     // 1語あたりの表記の上限（同音異義が多い読みで膨らませない）
+  const MIN_READING = 2;      // 1文字の読み（「き」→ 木・気 …）は展開しない
+  let vocab = null;
+  let vocabP = null;
+
+  function isKana(s) { return /^[\u3041-\u3096ー]+$/.test(s); }
+
+  function loadVocab() {
+    if (vocabP) return vocabP;
+    vocabP = (async () => {
+      const list = [];
+      const byReading = new Map();  // 読み → [{t, k}]（頻度順）
+      const readingsOf = new Map(); // 表記(正規化) → [読み]
       try {
         await load(); // 拡張子の判定に manifest が要る
         const data = await fetchJson(`${BASE}/suggest${ext()}`);
-        suggestList = (data.items || []).map((it) => ({ t: it.t, k: normalizeText(it.t) }));
+        for (const it of data.items || []) {
+          const e = { t: it.t, k: normalizeText(it.t), r: (it.r || []).map(normalizeText) };
+          list.push(e);
+          if (e.r.length) readingsOf.set(e.k, e.r);
+          for (const r of e.r) {
+            if (!byReading.has(r)) byReading.set(r, []);
+            byReading.get(r).push(e);
+          }
+        }
       } catch (_) {
-        suggestList = []; // 候補が無くても検索そのものは動く
+        // 語彙が無くても検索・補完は表記どおりで動く
       }
+      vocab = { list, byReading, readingsOf };
+      return vocab;
+    })();
+    return vocabP;
+  }
+
+  // 1語（正規化済み）を表記ゆれの組へ展開する。
+  // norm: 照合に使う正規化済みの表記（先頭は入力そのもの）
+  // display: 入力以外に含めた表記（画面に出す。語彙の表記そのまま）
+  function expandTerm(term) {
+    const norm = [term];
+    const display = [];
+    if (!vocab) return { norm, display };
+    const add = (k, shown) => {
+      if (norm.length >= MAX_VARIANTS || norm.includes(k)) return;
+      norm.push(k);
+      display.push(shown);
+    };
+    // かなで打たれたら、それ自体が読み。漢字なら語彙にある読みを引く。
+    const reads = isKana(term) ? [term] : vocab.readingsOf.get(term) || [];
+    for (const r of reads) {
+      if (r.length < MIN_READING) continue;
+      add(r, r);                                   // 「可愛い」→「かわいい」
+      for (const e of vocab.byReading.get(r) || []) add(e.k, e.t); // 「かわいい」→「可愛い」
     }
+    return { norm, display };
+  }
+
+  // 入力補完。表記の前方一致に加え、読みの前方一致でも拾う。
+  // 返り値: [{ t: 表記, reading: 読みで当たったときの読み（表記で当たったら null） }]
+  async function suggest(prefix, limit = 8) {
+    const key = normalizeText(prefix || "");
+    if (!key) return [];
+    await loadVocab();
     const out = [];
-    for (const s of suggestList) {
-      if (s.k !== key && s.k.startsWith(key)) {
-        out.push(s.t);
-        if (out.length >= limit) break;
+    for (const e of vocab.list) {
+      if (e.k === key) continue; // 打った語そのものは出さない
+      let reading = null;
+      if (!e.k.startsWith(key)) {
+        // 当たった読みが複数あれば長い方を見せる（「可愛い」は かわい/かわいい → かわいい。
+        // 短い方は読み付け器の誤読であることが多い）
+        reading = e.r.filter((r) => r.startsWith(key)).sort((a, b) => b.length - a.length)[0] || null;
+        if (!reading) continue;
       }
+      out.push({ t: e.t, reading });
+      if (out.length >= limit) break;
     }
     return out;
   }
 
-  return { mode: "static", search, context, facets, stats, suggest };
+  // 入力欄にフォーカスが来た時点で語彙を先読みする（1打鍵目から候補を出すため）
+  function prefetch() { loadVocab(); }
+
+  return { mode: "static", search, context, facets, stats, suggest, prefetch };
 })();
 
 window.Api = Api;
