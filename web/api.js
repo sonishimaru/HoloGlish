@@ -561,7 +561,10 @@ const Api = (function () {
         const reads = isKana(base) ? [base] : vocab.readingsOf.get(base) || [];
         for (const r of reads) {
           if (r.length < MIN_READING) continue;
-          add(r, r, MAX_VARIANTS);                                     // 可愛い → かわいい
+          // 漢字で打たれた語の読み（かな表記）は、語彙に実在する＝よく使われるときだけ足す
+          // （可愛い → かわいい）。実在しないかな書きはまれで（楽しい 26,570本に対し
+          // たのしい 72本）、足しても索引バケット（1個 ~0.6MB）を余計に取るだけになる。
+          if (vocab.byKey.has(r)) add(r, r, MAX_VARIANTS);
           for (const e of vocab.byReading.get(r) || []) add(e.k, e.t, MAX_VARIANTS); // かわいい → 可愛い
         }
       }
@@ -572,7 +575,14 @@ const Api = (function () {
         for (const e of vocab.inflOf.get(base) || []) add(e.k, e.t, cap); // 楽しい → 楽しかった
       }
     }
-    return { norm, display };
+    return { norm: minimalCover(norm), display };
+  }
+
+  // 照合に使う表記から、ほかの表記を丸ごと含むものを除く（かわい があれば かわいい は
+  // 必ずその中で当たる）。当たる発話の集合は変わらず、索引バケットの取得だけが減る。
+  // 画面に出す表記（display）とハイライトはそのまま。
+  function minimalCover(list) {
+    return list.filter((v) => !list.some((w) => w !== v && v.includes(w)));
   }
 
   // 入力補完。表記の前方一致に加え、読みの前方一致でも拾う。
@@ -602,7 +612,7 @@ const Api = (function () {
 
   return {
     mode: "static", search, context, facets, stats, suggest, prefetch,
-    _internals: { romajiToKana, looseForm }, // テスト用（tests/test_client_js.py）
+    _internals: { romajiToKana, looseForm, minimalCover }, // テスト用（tests/test_client_js.py）
   };
 })();
 

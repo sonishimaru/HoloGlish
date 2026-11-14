@@ -54,6 +54,7 @@ VOCAB = {
         {"t": "ありがとう", "n": 7},
         # 読み付け器ごとに読みが割れる語（短い方は誤読）。補完には長い方を見せる
         {"t": "可愛い", "n": 7, "r": ["かわい", "かわいい"]},
+        {"t": "かわいい", "n": 6},  # かな書きもよく使われる語（漢字の検索に足す対象）
         # 活用形と原形（本文: 今日も配信始めていきます / 最初の曲いきます）
         {"t": "始めて", "n": 6, "b": "始める"},
         {"t": "いきます", "n": 6, "b": "いく"},
@@ -115,11 +116,11 @@ def test_kana_query_finds_kanji_spelling(site):
     assert "元気" in r["results"][0]["snippet"]
 
 
-def test_kanji_query_also_finds_kana_spelling(site):
-    # 逆向き: 漢字で打つと、その読み（かな表記）も含める
-    r = search(site, "元気", expand=True)
-    assert r["variants"] == [["げんき"]]
-    assert r["total"] == search(site, "元気")["total"]   # フィクスチャに かな表記は無い
+def test_kanji_query_adds_kana_spelling_only_when_it_is_common(site):
+    # 逆向き: 漢字で打つと、その読み（かな表記）も含める。ただし、かな表記が語彙に
+    # 実在する（よく使われる）ときだけ。まれなかな書きのために索引を余計に取らない。
+    assert search(site, "可愛い", expand=True)["variants"] == [["かわいい"]]  # 語彙に実在
+    assert search(site, "元気", expand=True)["variants"] == [[]]               # げんき は語彙に無い
 
 
 def test_expansion_matches_kanji_search_exactly(site):
@@ -245,3 +246,17 @@ def test_fragments_get_no_suggestion(site):
     assert search(site, "nine")["suggestion"] is None
     assert search(site, "hello")["suggestion"] is None  # そもそもかなにならない
     assert search(site, "おはよう")["suggestion"] is None
+
+
+
+def test_minimal_cover(site):
+    """照合では、ほかの表記を含む表記を外す（当たる発話は同じで、取得が減る）。"""
+    got = internals(site, "minimalCover", [["可愛い", "かわいい", "かわい"], ["おはよー", "おはよ"], ["楽しい"]])
+    assert got == [["可愛い", "かわい"], ["おはよ"], ["楽しい"]]
+
+
+def test_minimal_cover_keeps_results_identical(site):
+    # 「おはよー」は照合上 [おはよ] だけになるが、結果も表示も変わらない
+    r = search(site, "おはよー", expand=True)
+    assert r["variants"] == [["おはよ"]]
+    assert r["total"] == search(site, "おはよ")["total"] == 3
