@@ -13,6 +13,9 @@ on:
     paths:
       - "web/**"
       - "pipeline/export_static.py"
+      - "pipeline/suggest.py"
+      - "pipeline/readings.py"
+      - "requirements-export.txt"
       - ".github/workflows/pages.yml"
   # 定期収集が終わったら最新の索引で再公開
   workflow_run:
@@ -43,8 +46,8 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        # export は PyYAML のみで動く（yt-dlp / fastapi は不要）
-        run: pip install PyYAML
+        # export に要るのは PyYAML と読み付け（表記ゆれの束ね）だけ（yt-dlp / fastapi は不要）
+        run: pip install -r requirements-export.txt
 
       - name: Prepare index (collected or fixtures fallback)
         run: |

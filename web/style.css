@@ -55,6 +55,12 @@ main { max-width: 900px; margin: 0 auto; padding: 0 16px 64px; }
 }
 .ac-item { padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 1rem; }
 .ac-item:hover, .ac-item.active { background: var(--panel-2); color: var(--accent); }
+.ac-reading { margin-left: 10px; color: var(--muted); font-size: .8rem; }
+
+.filters .toggle {
+  display: inline-flex; align-items: center; gap: 6px; padding: 0 4px;
+  color: var(--muted); font-size: .85rem; cursor: pointer; user-select: none;
+}
 
 .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 .filters select {

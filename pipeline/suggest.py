@@ -172,9 +172,30 @@ def build_suggestions(
     stride = max(1, len(texts) // sample_max) if sample_max else 1
     sample = texts[::stride]
     min_count = max(3, len(sample) // 20000)
+    items = mine(sample, min_count=min_count, limit=limit)
+    attach_readings(items)
     return {
-        "version": 1,
+        "version": 2,
         "sampled": len(sample),
         "min_count": min_count,
-        "items": mine(sample, min_count=min_count, limit=limit),
+        "items": items,
     }
+
+
+def attach_readings(items: List[Dict[str, Any]]) -> int:
+    """漢字を含む候補に読み ``r``（ひらがなのリスト）を付ける。付けた件数を返す。
+
+    クライアントはこれを2通りに使う:
+    - 入力補完: 「たの」と打つと読みの前方一致で「楽しい」も出す。
+    - 表記ゆれ展開: 「たのしい」で検索すると「楽しい」も含めて探す。
+    読み付けの依存が無い環境では何も付けない（補完は表記の前方一致だけで動く）。
+    """
+    from .readings import reading_list
+
+    n = 0
+    for it in items:
+        r = reading_list(it["t"])
+        if r:
+            it["r"] = r
+            n += 1
+    return n
