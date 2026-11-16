@@ -221,6 +221,12 @@ jobs:
 
       - name: Download index artifact
         uses: actions/download-artifact@v4
+        # ダウンロードがハングしたら早めに打ち切る。2026-11-16 Run#323 で
+        # このステップが5時間50分無応答のままジョブ上限(350分)まで走り、
+        # concurrency グループを塞いで次の定期ランを1枠失った。通常は
+        # 12GB でも15分前後で終わるので60分あれば十分。失敗しても push は
+        # 走らず（パート検証もあるため）ブランチは無傷、次ランが再公開する。
+        timeout-minutes: 60
         with:
           name: hologlish-index
           path: ${{ runner.temp }}/pub
