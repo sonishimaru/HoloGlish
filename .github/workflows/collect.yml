@@ -11,8 +11,11 @@ name: Scheduled Collect
 
 on:
   # Supadata サービス経路で 6 時間ごとに自動収集する。
+  # 【注意】毎時0分ちょうどは GitHub の cron 混雑時間帯で、実測で1〜4時間の遅延や
+  # 発火スキップが多発した（2026-11-26〜27 に1日4ラン予定が2ランに半減）。
+  # 0分を避けた分を指定して混雑を回避する。
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: "23 */6 * * *"
   workflow_dispatch:
     inputs:
       branch:
